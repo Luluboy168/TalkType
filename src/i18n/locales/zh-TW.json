@@ -1,0 +1,38 @@
+{
+  "app": {
+    "name": "TalkType",
+    "version_label": "版本"
+  },
+  "hud": {
+    "title": "TalkType HUD"
+  },
+  "sidebar": {
+    "dashboard": "儀表板",
+    "history": "歷史紀錄",
+    "dictionary": "字典",
+    "settings": "設定",
+    "guide": "使用指南"
+  },
+  "views": {
+    "dashboard": {
+      "heading": "儀表板",
+      "description": "查看最近的轉錄活動與使用統計。"
+    },
+    "history": {
+      "heading": "歷史紀錄",
+      "description": "瀏覽所有過往的語音轉錄結果，可搜尋與刪除。"
+    },
+    "dictionary": {
+      "heading": "字典",
+      "description": "管理自訂詞彙以提升轉錄準確度。"
+    },
+    "settings": {
+      "heading": "設定",
+      "description": "調整熱鍵、轉錄供應商、API 金鑰與其他偏好。"
+    },
+    "guide": {
+      "heading": "使用指南",
+      "description": "認識 TalkType 的核心功能與操作流程。"
+    }
+  }
+}
