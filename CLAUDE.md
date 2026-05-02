@@ -231,6 +231,20 @@ Phase 1 設好以下 hooks（學 SayIt）：
 - **Windows 11**（Phase 1 開發 + 測試平台）
 - **Visual Studio Build Tools**（Rust on Windows 編譯需要）
 
+## Subagent-driven 工作流程（重要）
+
+> 對 Claude Code：所有實作工作必須遵守此流程。Main session 只做 orchestration，重活交給 subagents。
+
+1. **拆解任務**：先把工作拆成小的、獨立可平行的子任務（用 TodoWrite 追蹤）
+2. **Dispatch subagents（Opus 4.7）執行實作**：每個子任務派遣 subagent 處理（指定 `model: opus`），主 session 不直接寫 code
+3. **完成後 dispatch subagents（Opus 4.7）做 code review + 功能測試**：每個 feature / 任務完成後，派另一組 subagent（`model: opus`，可用 `superpowers:code-reviewer`）進行獨立 code review 與功能測試 — 避免 implementer 自己 review 的盲點
+4. **UI 變更必須截圖驗證**：若涉及 UI，subagent 必須用 Playwright 截圖並用 Read 工具檢視（或附給主 session 檢視），確認 UI 符合預期才算完成
+
+**為什麼**：
+- 主 session 的 context 寶貴，subagent 可隔離執行重活、平行加速
+- Independent reviewer 比 implementer 更容易發現 bug 與設計問題
+- UI 視覺檢查比 type check 可靠（type check 過 ≠ UI 對）
+
 ## 工作流程提醒
 
 對 Claude Code working in this repo：
