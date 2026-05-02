@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dashboard",
+  "description": "Dashboard window — full permissions",
+  "windows": ["main-window"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-set-focus",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-close",
+    "opener:default"
+  ]
+}

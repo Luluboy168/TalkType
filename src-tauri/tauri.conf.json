@@ -12,9 +12,33 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "TalkType",
-        "width": 800,
-        "height": 600
+        "url": "index.html",
+        "width": 400,
+        "height": 100,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "resizable": false,
+        "shadow": false,
+        "center": true
+      },
+      {
+        "label": "main-window",
+        "title": "TalkType",
+        "url": "main-window.html",
+        "width": 960,
+        "height": 680,
+        "minWidth": 720,
+        "minHeight": 480,
+        "resizable": true,
+        "decorations": true,
+        "center": true,
+        "visible": false
       }
     ],
     "security": {
