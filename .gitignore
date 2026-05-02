@@ -1,0 +1,49 @@
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Tauri
+src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Test artifacts
+test-results/
+playwright-report/
+playwright/.auth/
+coverage/
+
+# Tauri signing keys (NEVER commit)
+*.key
+*.key.pub
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Temp / scratch
+tmp/
+.tmp/
+*.bak
+*.swp
