@@ -4,7 +4,8 @@
     "version_label": "版本"
   },
   "hud": {
-    "title": "TalkType HUD"
+    "title": "TalkType HUD",
+    "pongCount": "pong: {count}"
   },
   "sidebar": {
     "dashboard": "儀表板",
@@ -12,6 +13,13 @@
     "dictionary": "字典",
     "settings": "設定",
     "guide": "使用指南"
+  },
+  "dashboard": {
+    "ipcSmoke": {
+      "title": "IPC 連線測試",
+      "sendPing": "發送 ping",
+      "waiting": "等待 pong…"
+    }
   },
   "views": {
     "dashboard": {

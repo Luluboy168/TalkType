@@ -4,7 +4,8 @@
     "version_label": "Version"
   },
   "hud": {
-    "title": "TalkType HUD"
+    "title": "TalkType HUD",
+    "pongCount": "pong: {count}"
   },
   "sidebar": {
     "dashboard": "Dashboard",
@@ -12,6 +13,13 @@
     "dictionary": "Dictionary",
     "settings": "Settings",
     "guide": "Guide"
+  },
+  "dashboard": {
+    "ipcSmoke": {
+      "title": "IPC smoke test",
+      "sendPing": "Send ping",
+      "waiting": "Waiting for pong…"
+    }
   },
   "views": {
     "dashboard": {
