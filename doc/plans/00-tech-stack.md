@@ -14,15 +14,15 @@
 | **Desktop framework** | Tauri | v2 | Native + Web hybrid、binary 小、Rust 後端強 |
 | **後端語言** | Rust | stable | 已驗證 by SayIt；audio (cpal/hound/rustfft) 跟 cross-platform input (rdev/windows) 生態完整 |
 | **前端框架** | Vue 3 | ^3.5 | Composition API + `<script setup>`、shadcn-vue 生態 |
-| **語言** | TypeScript | ^5.7 | 嚴格 type safety、IPC payload 驗證 |
+| **語言** | TypeScript | ^6.0 | 嚴格 type safety、IPC payload 驗證（M0 用 `create-tauri-app` 4.7 預設、`baseUrl` 在 TS 6 已 deprecated 但 path alias 仍可用） |
 | **State management** | Pinia | ^3.0 | Vue 3 官方推薦、composition style |
 | **Routing** | Vue Router | ^5（hash mode）| Tauri file:// protocol 相容 |
 | **CSS** | Tailwind v4 | ^4 | 配合 shadcn-vue、語意 token system |
-| **UI components** | shadcn-vue | new-york style | Vue port of shadcn/ui、不是 npm package、複製進 src/components/ui/ |
+| **UI components** | shadcn-vue | ^2.6（reka-nova style） | Vue port of shadcn/ui；v2 起既是 CLI 也是 runtime npm 套件（`dist/tailwind.css` 被 `@import`）；style 在 v2 從 "new-york" 改名為 "reka-nova"，generated components 仍複製進 `src/components/ui/` |
 | **UI primitives** | reka-ui | ^2 | Vue port of Radix UI、shadcn-vue 底層 |
-| **Icons** | lucide-vue-next | latest | Tree-shakeable、設計一致 |
+| **Icons** | lucide-vue-next | ^1.0 | Tree-shakeable、設計一致（v1.0 於 2026-Q1 release） |
 | **i18n** | vue-i18n | ^11 | 業界標準 |
-| **Build tool** | Vite | ^6 | Tauri 預設、HMR 快 |
+| **Build tool** | Vite | ^8 | Tauri 預設、HMR 快（M0 實際 8.0.10） |
 | **Package manager** | pnpm | 10.x（pin）| 比 npm 快、disk 省、workspace 支援 |
 | **Node** | 24 (LTS) | pin via `.nvmrc` | 跟 SayIt 一致 |
 
@@ -117,7 +117,8 @@
 | `pinia` | ^3 | State management |
 | `vue-i18n` | ^11 | i18n |
 | `reka-ui` | ^2 | UI primitives |
-| `lucide-vue-next` | latest | Icons |
+| `shadcn-vue` | ^2.6 | shadcn-vue v2 既是 CLI 也是 runtime dep（`dist/tailwind.css` 被 `src/assets/index.css` `@import`）|
+| `lucide-vue-next` | ^1.0 | Icons |
 | `class-variance-authority` | ^0.7 | shadcn variant API |
 | `clsx` | ^2 | className helper |
 | `tailwind-merge` | ^3 | className merge |
@@ -135,13 +136,13 @@
 
 | Package | 版本 | 用途 |
 |---|---|---|
-| `vite` | ^6 | Build |
-| `@vitejs/plugin-vue` | ^5 | Vue support |
+| `vite` | ^8 | Build（M0 實際 8.0.10）|
+| `@vitejs/plugin-vue` | ^6 | Vue support |
 | `@tailwindcss/vite` + `tailwindcss` + `tw-animate-css` | ^4 | Styling |
 | `@tauri-apps/cli` | ^2 | Tauri CLI |
-| `typescript` + `vue-tsc` | latest | Type checking |
-| `eslint` + `eslint-plugin-vue` + `typescript-eslint` + `@eslint/js` | latest | Linting |
-| `vitest` + `@vitest/coverage-v8` + `@vue/test-utils` + `jsdom` | latest | Unit + component tests |
+| `typescript` + `vue-tsc` | ^6 / ^3 | Type checking（TS 6 + vue-tsc 3）|
+| `eslint` + `eslint-plugin-vue` + `typescript-eslint` + `@eslint/js` | latest | Linting（M0：eslint 10 flat config）|
+| `vitest` + `@vitest/coverage-v8` + `@vue/test-utils` + `jsdom` | latest | Unit + component tests（M0：vitest 4）|
 | `@playwright/test` | ^1 | E2E tests（Phase 2 主要）|
 | `@faker-js/faker` | latest | Test data factories |
 

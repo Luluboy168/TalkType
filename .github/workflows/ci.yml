@@ -1,0 +1,73 @@
+name: CI
+
+# Note: `on` is quoted to avoid YAML 1.1 reserving it as a boolean (`true`).
+# GitHub Actions accepts both forms; quoting keeps third-party YAML linters happy.
+"on":
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same ref when a newer commit lands.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Type check, lint, vitest, cargo check
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      # Surface a stable cargo target dir for the rust-cache action.
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pnpm must be available before setup-node so that `cache: pnpm` works.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check (vue-tsc)
+        run: pnpm exec vue-tsc --noEmit
+
+      # Phase 1 baseline has ~18 ESLint warnings on default scaffolding.
+      # 25 leaves a small headroom; tighten as the codebase matures.
+      - name: Lint (eslint)
+        run: pnpm exec eslint . --max-warnings 25
+
+      - name: Unit tests (vitest)
+        run: pnpm test
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # Bust on Cargo.lock changes; honor the workspace's target dir.
+          shared-key: src-tauri-stable
+
+      - name: Cargo check
+        working-directory: src-tauri
+        run: cargo check --locked
