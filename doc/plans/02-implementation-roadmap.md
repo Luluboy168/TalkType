@@ -9,7 +9,7 @@
 
 | Milestone | 狀態 | 起 | 訖 |
 |---|---|---|---|
-| M0：Repo bootstrap | 📋 Planned | TBD | TBD |
+| M0：Repo bootstrap | ✅ Done | 2026-05-02 | 2026-05-02 |
 | M1：基礎 IPC + 雙視窗 | 📋 Planned | TBD | TBD |
 | M2：錄音 pipeline (Rust) | 📋 Planned | TBD | TBD |
 | M3：Cloud transcription | 📋 Planned | TBD | TBD |
