@@ -6,9 +6,21 @@
 
 ## 專案狀態
 
-- **Phase**：Pre-implementation（規劃階段）
+- **Phase**：Phase 1 — Implementation（M0 ✅ Done @ 2026-05-02、M1 📋 Planned）
 - **Repo**：https://github.com/Luluboy168/TalkType
 - **Bundle ID**：`com.luluboy168.talktype`
+
+## Session Memory（給 Claude Code 接力用 — 開始 working 前先讀）
+
+`.claude/` 下有跨 session 共用的 memory（committed 進 git）：
+
+| File | 用途 |
+|---|---|
+| [`.claude/PROGRESS.md`](.claude/PROGRESS.md) | 整體進度 + entry point |
+| [`.claude/sessions/`](.claude/sessions/) | 每個 working session 的詳細紀錄（What changed / Key decisions / Surprises / Follow-ups） |
+| [`.claude/IDEAS.md`](.claude/IDEAS.md) | 不歸屬於當前 milestone 的想法 parking lot |
+
+**對 Claude Code（你）**：開始任何 task 前，先讀 `.claude/PROGRESS.md` 與最新一篇 session log（順便 skim `IDEAS.md` 看有沒有相關項目）。Session 結束 / 重要 task 完成時，append summary 到當天的 session file（或新建 `sessions/YYYY-MM-DD-topic.md`）。
 
 ## 文件導覽（快速參照）
 
@@ -227,10 +239,13 @@ Phase 1 設好以下 hooks（學 SayIt）：
 2. **加 Rust command 或 event**：同時更新 `plans/01-architecture.md` IPC 契約表
 3. **加 dependency**：同時更新 `plans/00-tech-stack.md`
 4. **變更 Schema**：bump `schema_version`、寫 migration、更新 `plans/05-data-model.md`
-5. **完成 milestone**：更新 `plans/02-implementation-roadmap.md` 進度 dashboard
+5. **完成 milestone**：更新 `plans/02-implementation-roadmap.md` 進度 dashboard 與 `.claude/PROGRESS.md`「現在在哪 / 最近的 session」
 6. **Phase 1 milestone 卡關**：先看 `doc/reference/sayit-improvements.md`，可能 SayIt 已踩過雷
 7. **設計新 feature**：先 brainstorm（用 superpowers:brainstorming skill）、產出 spec、再寫 plan
 8. **修 bug**：先看 SayIt CHANGELOG 是否已知、不重蹈覆轍
+9. **Session 結束 / 重要 task 完成**：append summary 進當天 `.claude/sessions/YYYY-MM-DD-*.md`（含 What changed / Key decisions / Surprises / Follow-ups）；如當天還沒 session log 就新建一個
+10. **想到非當前 task scope 的點子**：丟進 `.claude/IDEAS.md` parking lot
+11. **修了 hooks / `.claude/settings.json` 後**：提醒使用者重啟 Claude Code session 才會 pick up（child session 不會 reload settings）
 
 ## License
 
