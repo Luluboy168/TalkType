@@ -6,7 +6,7 @@
 ## 現在在哪
 
 - **Phase**：Phase 1 — OSS MVP
-- **進度**：M0 ✅ Done（2026-05-02）／ M1 📋 Planned
+- **進度**：M0 ✅ Done（2026-05-02）／ M1 ✅ Done（2026-05-02）／ M2 📋 Planned
 - **正式 milestone 表**：[doc/plans/02-implementation-roadmap.md](../doc/plans/02-implementation-roadmap.md#進度-dashboard)
 - **GitHub**：[Luluboy168/TalkType](https://github.com/Luluboy168/TalkType)、main 已含 M0（PR #1 merged）
 
@@ -15,6 +15,7 @@
 | 日期 | Topic | Outcome |
 |---|---|---|
 | [2026-05-02](sessions/2026-05-02-m0-bootstrap.md) | M0 Repo bootstrap + memory setup | ✅ M0 done、PR #1 merged、CI green、memory 系統建立 |
+| [2026-05-02](sessions/2026-05-02-m1-dual-window.md) | M1 Dual-window IPC + tray + single-instance | ✅ M1 done、3 chunks 落地、static checks all green、Tauri dev build smoke pass |
 
 ## Memory file 結構
 

@@ -3,6 +3,19 @@
 > 不屬於當前 milestone 的想法、改進建議、待考慮事項。
 > 進入某個 milestone 時可以掃過、把相關項目搬進 milestone 的 plan 或 session log。
 
+## 待考慮（M1 收穫，M2+ 用得到）
+
+- **HUD `visible: false` 讓 M1 視覺驗證很彆扭** — 每次想看 HUD 要手改 `tauri.conf.json`。考慮 M5 一起處理：
+  - 加一個 dev-only env var（`TALKTYPE_DEV_HUD=1`）強制 HUD `visible: true`
+  - 或者 dev-only Tauri command（`set_hud_visible_for_dev`）方便冒煙時手動 toggle
+  - 或者在 dev mode 下 HUD 直接 visible（`#[cfg(debug_assertions)]`）
+- **Tauri `beforeDevCommand: "pnpm dev"` PATH 踩雷** — Tauri child process 找不到 `pnpm`（M0 已知，M1 chunk 3 重現）。三個選項：
+  1. 寫進 README（最簡單）
+  2. 改成 `node ./node_modules/vite/bin/vite.js`（移除 pnpm 依賴，但較 ugly）
+  3. 在 `package.json scripts` 加一個 `dev:tauri` wrapper 設好 PATH
+  選 1 最簡單，M9 release prep 前一定要做。
+- **Pong listener leak 防護**：M1 chunk 3 在 IpcSmokeTest 與 HudOverlay 都用 `onMounted` register + `onUnmounted` unlisten 模式；以後 composables 寫成 helper（`useEventListener(name, handler)`）統一處理 unlisten 是否值得？M2 加 `useAudioWaveform` 時順手做。
+
 ## 待考慮（M1+ 也許用得到）
 
 - **`.vscode/extensions.json` 是否要 commit** 給未來 contributors？目前 `.gitignore` 把 `.vscode/` 整個 ignore。Pro：新手 clone 進來自動得到 Volar / tauri / rust-analyzer recommendations。Con：可能撞到別人偏好。
