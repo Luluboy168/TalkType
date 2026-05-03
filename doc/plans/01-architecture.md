@@ -1,6 +1,6 @@
 # 系統架構
 
-> **狀態**：Draft v1（M1 + M2 IPC contract 已落地）
+> **狀態**：Draft v1（M1 + M2 IPC contract 已落地、M3 + M6 plan 經 challenger refine）
 > **最後更新**：2026-05-03
 
 ## 高層架構圖
@@ -108,9 +108,12 @@
 | `read_recording_file` | audio_recorder/files (M2) | 讀 `recordings/<id>.wav`；id 必須 parse 成 UUID（path-traversal defense）；回 `tauri::ipc::Response`（raw bytes） |
 | `delete_all_recordings` | audio_recorder/files (M2) | 刪除 `recordings/*.wav`、回刪除筆數 `u32` |
 | `cleanup_old_recordings` | audio_recorder/files (M2) | 刪除 mtime 超過 `days` 的 `*.wav`、回已刪除 id `Vec<String>` |
-| `transcribe_cloud` | transcription_cloud | 送 Groq Whisper 並回 raw text |
-| `transcribe_local` | transcription_local | 用 whisper.cpp 本地轉錄 |
-| `polish_text` | (Rust 不做、frontend 直接 fetch LLM API via plugin-http) | — |
+| `transcribe_audio` | transcription | dispatcher：依 settings 派 cloud / local（M3 ship cloud） |
+| `transcribe_cloud` | transcription/cloud (M3) | 內部：送 Groq Whisper、`transcribe_busy` guard、emit `transcription:completed` |
+| `transcribe_local` | transcription/local (M7) | 內部：whisper.cpp 本地轉錄 |
+| `test_provider_connection` | transcription / llm_polish (M3 + M6) | 1-2s 內測試 API key + 網路；M3 ship Groq、M6 extend 4 provider |
+| `clear_recording_buffer` | audio_recorder (M3) | 清 `wav_buffer`，避免 RAM 漏（M2 retro #3） |
+| `polish_text` | llm_polish (M6) | Rust-side fetch 4 provider；API key 不過 IPC（Q1 (a)） |
 | `paste_text` | clipboard_paste | 把 text 放剪貼簿 + 模擬 Ctrl+V |
 | `copy_to_clipboard` | clipboard_paste | 純複製 |
 | `capture_target_window` | clipboard_paste | Windows-only：記下 paste 目標 HWND |
@@ -142,8 +145,12 @@
 | `escape:pressed` | hotkey_listener | `()` |
 | `audio:waveform` | audio_recorder (M2) | `WaveformPayload { levels: [f32; 6] }` ~60 fps（每 16 ms 一次）— 6 個正規化 FFT magnitude（Hann window + bins `[9, 4, 1, 2, 6, 12]`、`normalize_db(-100, -20)`） |
 | `audio:preview-level` | audio_recorder (M2) | `AudioPreviewLevelPayload { level: f32 }` ~33 fps（每 30 ms 一次）— RMS 振幅 `[0.0, 1.0]` |
-| `transcription:progress` | transcription_local | `{ percent: f32 }` (whisper.cpp) |
-| `model:download-progress` | transcription_local | `{ modelId, downloaded, total }` |
+| `audio:recording-aborted` | audio_recorder (M3) | `RecordingAbortedPayload { reason: 'max_size' \| 'mic_unplug' \| ..., bytesRecorded }` — 達 `MAX_WAV_BYTES` 或裝置斷線時自動觸發 stop_recording 並 emit |
+| `audio:mic-safety-warning` | audio_recorder (M3) | `MicSafetyPayload { detail }` — `stream.pause()` 失敗時 emit（取代 release build 看不到的 stderr SECURITY: log；M2 retro #2） |
+| `transcription:completed` | transcription (M3) | `TranscriptionResult { rawText, transcriptionDurationMs, noSpeechProbability }` — 廣播給雙視窗、Dashboard history 用 |
+| `transcription:progress` | transcription/local (M7) | `{ percent: f32 }` (whisper.cpp) |
+| `model:download-progress` | transcription/local (M7) | `{ modelId, downloaded, total }` |
+| `polish:failed-fallback` | llm_polish (M6) | `PolishFallbackPayload { reason, providerId }` — polish 失敗時、fallback to raw 並通知 HUD 顯示 warning icon |
 | `settings:updated` | (lib.rs Rust state) | `Settings` snapshot |
 | `history:added` | database | `TranscriptionRecord` |
 | `vocabulary:changed` | database | `()` (frontend re-fetch) |

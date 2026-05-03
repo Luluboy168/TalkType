@@ -1,6 +1,6 @@
 # 實作 Roadmap
 
-> **狀態**：Draft v1（M0–M2 done）
+> **狀態**：Draft v1（M0–M2 done、M3 + M6 plan 經 challenger pass + Q1–Q5 review refined）
 > **最後更新**：2026-05-03
 
 依 milestone 順序拆解 Phase 1 全部任務。每個 milestone 給：deliverable、tasks、acceptance criteria、預估時間、依賴。
@@ -155,45 +155,106 @@
 
 > **Deliverable**：錄完音可以 invoke 一個 command 把 WAV 送 Groq Whisper、拿回原始文字
 
+### 設計決策（2026-05-03 plan-time challenger + Q1–Q5 review 後定案）
+
+- **API key 嚴格 Rust-only**（Q1）：`transcribe_cloud` 與後續 M6 LLM polish 一律 Rust-side fetch；frontend 永遠拿不到 key 內容、只能 `set_credential` / `delete_credential` / `has_credential`。對應 [01-architecture.md](01-architecture.md) 不變式 #1。
+- **Hard reject > 25 MB**（Q2）：`MAX_WAV_BYTES = 25_000_000` 同時護住 M2 retro #1（OOM 防止）、Groq cap、UX 一致。錄音中達標 emit `audio:recording-aborted` 自動 stop；轉錄前再驗一次（**先驗 size 再 `take()`**）。
+- **Vocabulary 兩層**（Q3）：Whisper prompt（probabilistic bias）+ M6 LLM polish（reliable enforcement）共用同一 list；cap **600 chars + 50 terms 雙保險**（避開 Groq prompt char limit ~896；中文人名 / 長詞才不會觸頂）。
+- **Proxy 支援**（Q4）：reqwest 預設讀 `HTTPS_PROXY` / `HTTP_PROXY` env var；README 加說明、零程式碼。
+- **Test connection 按鈕**（Q5）：M3 ship Groq、M6 extend 到其他 3 provider；同一 Rust command `test_provider_connection` 驗證 key + 網路 + provider 服務狀態。
+- **Provider dispatcher 統一**：以 [06-hybrid-transcription.md](06-hybrid-transcription.md) 的 dispatcher pattern 為準（Rust 內部 `transcribe_audio` 派 cloud / local）。
+
 ### Tasks
 
-- [ ] 加 Cargo dep：`reqwest 0.12` (multipart, json)
+#### 前置：M2 retro 收尾
+
+- [ ] **`audio_recorder/mod.rs` → `commands.rs` 拆分**（M2 retro 已 flagged、commands 量會增）
+- [ ] **`MAX_WAV_BYTES = 25_000_000`** 常數 + 防呆：
+  - [ ] `recording_thread.rs` 監測 buffer size、達標 emit `audio:recording-aborted` event + 自動 stop_recording（M2 retro #1 OOM 防止）
+  - [ ] `consume_wav_buffer()` helper（`Mutex::take()` 包裝、是 transcribe 的 last consumer；`save_recording_file` 仍 clone）
+  - [ ] `clear_recording_buffer` command（M2 retro #3：避免 RAM 漏；`AudioRecordTest` unmount 時呼叫）
+
+#### Credentials
+
+- [ ] 加 Cargo dep：`keyring = "3"`、`reqwest = "0.12"` (features: `multipart`, `json`, `default-tls`)、（test only）`wiremock`
 - [ ] `plugins/credentials.rs`：
-  - [ ] 加 dep `keyring 3`
-  - [ ] `set_credential(provider: String, key: String) -> Result<()>`
-  - [ ] `get_credential(provider: String) -> Result<Option<String>>`
+  - [ ] `set_credential(provider: String, key: String) -> Result<()>`：自動 trim 前後空白、前綴粗檢（`gsk_*` for Groq、`sk-*` for OpenAI 等；錯就 reject 而非 401 surprise）
+  - [ ] `has_credential(provider: String) -> Result<bool>`（不暴露 key 內容給 frontend）
   - [ ] `delete_credential(provider: String) -> Result<()>`
-  - [ ] Service name 用 `com.luluboy168.talktype`
-  - [ ] User name 用 `provider_id`（如 `groq`、`openai`）
-- [ ] `plugins/transcription_cloud.rs`：
-  - [ ] `TranscriptionState { client: reqwest::Client }`（120s timeout、connection pool）
-  - [ ] `transcribe_cloud(provider: String, vocabulary: Option<Vec<String>>, model_id: Option<String>, language: Option<String>) -> Result<TranscriptionResult, TranscriptionError>`
-    - 從 `AudioRecorderState::wav_buffer` `take()` WAV
-    - 從 keyring 讀 API key（**不從 frontend 傳**）
-    - 驗證 size: `>= 1000` bytes、`<= 25 MB`
-    - Build multipart form：`file`、`model`（預設 `whisper-large-v3-turbo`）、`response_format=verbose_json`、optional `language`、optional `prompt: "Important Vocabulary: t1, t2, ..."`
-    - POST to `https://api.groq.com/openai/v1/audio/transcriptions`
-    - 解析 verbose_json：`text`、`segments` 計算 `min(no_speech_prob)`
-    - 回 `TranscriptionResult { rawText, transcriptionDurationMs, noSpeechProbability }`
-- [ ] `TranscriptionError` enum：`NoAudioData`、`AudioTooSmall(usize)`、`FileTooLarge`、`ApiKeyMissing`、`RequestFailed`、`ApiError(u16, String)`、`ParseError`、`LockPoisoned`
+  - [ ] **不暴露 `get_credential` 給 frontend**；只 Rust internal 用
+  - [ ] Service name `com.luluboy168.talktype`、user name = `provider_id`（`groq` / `openai` / `anthropic` / `gemini`）
+
+#### Transcription dispatcher + Groq cloud
+
+- [ ] `plugins/transcription/mod.rs`：
+  - [ ] `TranscriptionState { client: reqwest::Client, transcribe_busy: Arc<AtomicBool> }`：120s timeout、connection pool、`User-Agent: TalkType/0.0.1`
+  - [ ] `transcribe_audio(vocabulary: Option<Vec<String>>) -> Result<TranscriptionResult, TranscriptionError>` dispatcher：
+    - 從 `SettingsState` 讀 `whisper_provider` 與 `whisper_model_id` 派 cloud / local（M7）
+    - `transcribe_busy` AtomicBool guard：in-flight 期間 user 重啟錄音 → reject 新 `start_recording` with `Busy` error
+- [ ] `plugins/transcription/cloud.rs` `transcribe_cloud_internal(...)`（pub(crate)）：
+  - **Pre-check**：`wav_buffer.is_some()`、size in `[1000, MAX_WAV_BYTES]`（**先驗 size 再 `take()`** — 避免 user 失敗時 WAV 被吃掉）
+  - **Network preflight**（可選優化）：`HEAD api.groq.com` 3s timeout 區別 `Offline` 與其他失敗（避免 user 等 120s）
+  - 從 keyring 讀 API key（Rust-only、不過 IPC）
+  - **Vocabulary cap**：list 內 term 個數 ≤ 50 **且** 拼接後 ≤ 600 chars；超出取 prefix（不 truncate term 中間）
+  - Build vocabulary prompt：format `"Important Vocabulary: t1, t2, ..."`
+  - Multipart：`file`、`model`（預設 `whisper-large-v3-turbo`）、`response_format=verbose_json`、optional `language`、optional `prompt`
+  - POST `https://api.groq.com/openai/v1/audio/transcriptions`
+  - 解析 `verbose_json`：`text`、`segments` → `min(no_speech_prob)`
+  - **`take()` only after success**（失敗時 buffer 仍在、user 可手動 `save_recording_file` 留檔）
+  - Emit `transcription:completed` event 廣播給雙視窗（Dashboard 後續 history refresh）
+  - 回 `TranscriptionResult { rawText, transcriptionDurationMs, noSpeechProbability }`
+
+#### Error taxonomy + retry
+
+- [ ] `TranscriptionError` enum（thiserror、manual `Serialize` 為 flat string）：
+  - 資料：`NoAudioData`、`AudioTooSmall(usize)`、`FileTooLarge { actual_bytes, max_bytes }`、`Busy`
+  - 認證：`ApiKeyMissing`
+  - 網路（拆細自原 `RequestFailed`）：`Offline`、`DnsFailure`、`TlsFailure { detail }`、`Timeout`、`ConnectionRefused`
+  - 服務：`RateLimited { retry_after_secs: Option<u64> }`（解析 Groq `Retry-After` header）、`ApiError { status, body }`、`ParseError { detail }`
+  - 內部：`LockPoisoned`
+- [ ] **Retry policy**：自動 retry 1 次只在 `Timeout` / `RateLimited`（後者 honor `Retry-After`）；4xx / `ApiKeyMissing` / `Offline` / `Busy` 不 retry
+
+#### Test connection（Q5）
+
+- [ ] `test_provider_connection(provider: String) -> Result<TestConnectionResult, TestConnectionError>`：
+  - 從 keyring 讀對應 provider key
+  - GET `https://api.groq.com/openai/v1/models` + Bearer auth + 5s timeout（M3 限 Groq；M6 extend 到 OpenAI / Anthropic / Gemini 各自 `/models` endpoint）
+  - 200 → `{ ok: true, modelCount: usize }`
+  - 401 → `InvalidKey`、403 → `RestrictedKey`、429 → `RateLimited`、network → `NetworkError { detail }`
+
+#### CSP + capabilities
+
 - [ ] CSP 加 `connect-src https://api.groq.com`
 - [ ] Capability 加 `http:default { allow: [{ url: "https://api.groq.com/*" }] }`
-- [ ] Settings UI：
-  - [ ] Provider 選擇（dropdown：Groq/OpenAI/Anthropic/Gemini，Phase 1 先 Groq）
-  - [ ] API key input → invoke `set_credential` 存進 keyring
-  - [ ] Show「✅ Saved」狀態（從 keyring 讀回確認）
-  - [ ] **絕不 show 真實 key 內容**（防 over-shoulder attack）
-- [ ] Rust unit tests：`format_whisper_prompt`、API key validation
+
+#### Settings UI
+
+- [ ] Provider 選擇（dropdown：Groq / OpenAI / Anthropic / Gemini、Phase 1 先 Groq）
+- [ ] API key 輸入框 → invoke `set_credential` 存進 keyring（自動 trim、前綴粗檢）
+- [ ] Show「✅ 已儲存」狀態（從 `has_credential` 確認、**絕不 show 真實 key 內容**）
+- [ ] **「測試連線」按鈕**（Q5）：點擊 → invoke `test_provider_connection` → 1-2s 顯示 ✅ 模型數 / ❌ 具體 reason
+- [ ] **Privacy disclosure**：第一次設 Groq key 時 dialog「Audio 將傳送到 Groq (US)、政策保留 14 天」（避免 Typeless 那種 marketing 失調）
+
+#### Tests + docs
+
+- [ ] Rust unit tests：
+  - `format_whisper_prompt`、API key trim、vocabulary cap（char + term 雙限）
+  - `wiremock`-based：8 個 error variant 各一個 mock 路徑（401 / 403 / 413 / 429 / timeout / parse error / etc.）
+  - `test_provider_connection` happy + 401 path
+- [ ] **README dev section**：加「Behind a corporate proxy?」一段（Q4）
 
 ### Acceptance criteria
 
 - ✅ Settings 存 API key → keyring 看得到（用 Windows Credential Manager 開來看）
 - ✅ Settings 不顯示 key 明文
-- ✅ 點測試按鈕：錄 3 秒 → invoke transcribe_cloud → 回正確文字
-- ✅ API key 錯：返回 ApiError(401)、UI 顯示友善 message
-- ✅ 無網路：返回 RequestFailed、UI 顯示 "Network error"
+- ✅ 點「測試連線」→ 1-2s 內顯示 Groq 模型清單長度（key 對）或「API key 無效」（key 錯）
+- ✅ 點測試按鈕：錄 3 秒 → invoke transcribe_audio → 回正確文字
+- ✅ API key 錯：返回 `InvalidKey`、UI 顯示「API key 無效，請檢查」
+- ✅ 無網路：返回 `Offline`、UI 顯示「連線失敗（檢查網路或 HTTPS_PROXY 設定）」
+- ✅ 錄音超過 25 MB：自動 stop + UI「錄音超過上限（~13 分鐘 @ 16 kHz）」
+- ✅ 在 in-flight transcribe 期間按熱鍵：拒絕新 start_recording 並提示「上一筆轉錄處理中」
 
-### 預估時間：1 週
+### 預估時間：1.5 週（含 Q5 test button + error taxonomy 拆細 + M2 retro 收尾）
 
 ### 依賴：M2
 
@@ -296,51 +357,108 @@
 
 ## M6：LLM Polish 多 Provider
 
-> **Deliverable**：4 個 LLM provider（Groq/OpenAI/Anthropic/Gemini）都能跑 polish、可開關、預設開
+> **Deliverable**：4 個 LLM provider（Groq/OpenAI/Anthropic/Gemini）都能跑 polish、可開關、預設開、Rust-side fetch（API key 不過 IPC）
+
+### 設計決策（2026-05-03 Typeless / 競品 research + Q1 (a) review 後定案）
+
+- **架構大轉**：原計畫的 `src/lib/{llmProvider,enhancer,modelRegistry}.ts` 全部移到 Rust（`plugins/llm_polish/`）。理由：
+  - Q1 (a) 守住 "API key 從不在前端" 不變式
+  - Marketing 一致性：v0.1.0 README 想寫「Your API keys never cross the IPC boundary」這種 strong claim、(b) frontend invoke get_credential 寫不出來
+  - M9 release audit 縮小 scope：(a) 只看 Rust、(b) 要看 Rust + frontend + Sentry config
+  - Typeless 2025-11 隱私翻車的反面教材
+- **Preset modes 改名**（Typeless / Wispr Flow research）：原 `minimal | active | custom` → `default (light cleanup) | email (formal) | chat (casual) | code (preserve format) | custom`。對 user 更直覺、對 LLM 提示更具體。
+- **Custom prompt 1000 char cap**：避免 prompt injection 把 system 角色蓋掉、避免超 token context 限制；UI 顯示 token estimate。
+- **Latency 收緊**（業界標 <2s、留 buffer）：Groq polish timeout 5s → **3s**、其他 provider 30s → **15s**；polish duration 寫進 `transcriptions.enhancement_duration_ms`（M8 schema 已有），dogfood 期收 p50/p95、M9 polish 時調。
+- **Per-app preset hooks**（Wispr Flow 招牌、Typeless adaptive tone）：M6 settings struct 預留 `per_app_preset: HashMap<String, PromptMode>` 但 Phase 1 不實作；v0.2 才接 `GetForegroundWindow().GetProcessName()` → preset。先預留 schema 避免 v0.2 還要動 store。
+- **Polish 失敗 fallback**：fallback 到原始 Whisper text + 顯示 warning（不阻擋 paste 流程）。
 
 ### Tasks
 
-- [ ] `src/lib/llmProvider.ts`（從 SayIt 學）：
-  - [ ] `LlmProviderId = "groq" | "openai" | "anthropic" | "gemini"`
-  - [ ] `LLM_PROVIDER_LIST`：4 entries with `baseUrl`、`consoleUrl`、`apiKeyPrefix`、`apiKeyHeaderStyle`
-  - [ ] `buildOpenAiCompatibleFetchParams(req, key)` — Groq + OpenAI（注意 `max_tokens` vs `max_completion_tokens`）
-  - [ ] `buildAnthropicFetchParams` — extract `system`、`x-api-key`、`anthropic-version`
-  - [ ] `buildGeminiFetchParams` — `/models/{model}:generateContent`、`x-goog-api-key`
-  - [ ] `parseProviderResponse` dispatcher
-  - [ ] Per-provider timeout：groq=5s、其他=30s
-- [ ] `src/lib/modelRegistry.ts`：
-  - [ ] `LLM_MODEL_LIST` — 至少 8 models（每個 provider 1-3 個）
-  - [ ] `WHISPER_MODEL_LIST` — Phase 1 只 cloud `whisper-large-v3-turbo`
-  - [ ] Helper：`findLlmModelConfig`、`getModelListByProvider`、`getDefaultModelIdForProvider`
-- [ ] `src/lib/enhancer.ts`：
-  - [ ] `enhanceText(rawText, providerId, modelId, vocabulary, options)`
-  - [ ] System prompt（zh-TW + en 兩版）：「把口語轉書面語、去贅詞、修標點」
-  - [ ] Vocabulary 注入：`<vocabulary>t1, t2, ...</vocabulary>`（max 50 terms）
-  - [ ] AbortSignal + timeout
-  - [ ] `stripReasoningTags` for `<think>...</think>`
-  - [ ] `EnhancerApiError(statusCode, statusText, body)`
-- [ ] **Important**：API key 從 Rust keyring 讀，不是 frontend store。Frontend 呼叫 invoke 拿 key（或 invoke wrap-call let Rust 直接 fetch — 評估）
-  - **決策**：Phase 1 走 invoke 拿 key（簡單）；Phase 2 評估改 Rust-side fetch（更安全）
-- [ ] `useVoiceFlowStore` 加 enhancement 步驟：
-  - [ ] After transcribe success → 如果 polish ON → `transitionTo("enhancing")` → enhanceText → paste
-  - [ ] Polish OFF → 直接 paste
-- [ ] Settings UI：
-  - [ ] LLM polish toggle Switch（**預設 ON**）
-  - [ ] Provider Select（同 Whisper provider，但獨立選擇）
-  - [ ] Model Select 過濾 by provider
-  - [ ] Test 按鈕：送 dummy text、show polished output
-- [ ] Vitest tests：`enhancer.test.ts`、`llmProvider.test.ts`
-- [ ] CSP + capability 加其他 3 個 provider URL
+#### Rust LLM polish module（取代原本 frontend lib/）
+
+- [ ] 加 Cargo deps（如 M3 沒加）：`reqwest 0.12`、`serde_json`、（test only）`wiremock`
+- [ ] `plugins/llm_polish/mod.rs`：
+  - [ ] `LlmPolishState { client: reqwest::Client, polish_busy: Arc<AtomicBool> }`
+  - [ ] `polish_text(raw_text: String, vocabulary: Option<Vec<String>>) -> Result<PolishResult, PolishError>` 主 command：
+    - 從 `SettingsState` 讀 `llm_provider`、`llm_model_id`、`llm_prompt_mode`、`llm_custom_prompt`
+    - 從 keyring 讀 LLM provider 的 API key（**Rust-only、不過 IPC**）
+    - Build provider-specific request、套 timeout（Groq 3s / 其他 15s）
+    - 解析 response、`stripReasoningTags` for `<think>...</think>`
+    - 回 `PolishResult { polishedText, durationMs }`
+  - [ ] `polish_busy` AtomicBool guard（避免雙重 polish 撞同 key 配額）
+- [ ] `plugins/llm_polish/providers.rs`（4 provider request 形狀）：
+  - [ ] `LlmProviderId` enum: `Groq | OpenAi | Anthropic | Gemini`
+  - [ ] `build_openai_compatible_request(req, key)` — Groq + OpenAI（注意 Groq `max_tokens`、OpenAI `max_completion_tokens`）
+  - [ ] `build_anthropic_request` — `system` field + `x-api-key` + `anthropic-version: 2023-06-01`
+  - [ ] `build_gemini_request` — `/v1beta/models/{model}:generateContent` + `x-goog-api-key`
+  - [ ] `parse_provider_response` dispatcher → unified `String` output
+- [ ] `plugins/llm_polish/prompts.rs`（preset modes、zh-TW + en 兩版）：
+  - [ ] `PromptMode` enum: `Default | Email | Chat | Code | Custom(String)`
+  - [ ] `default`: 「輕度清理：去贅詞、修標點、保留口語特徵」
+  - [ ] `email`: 「轉成正式書面語、結構化段落、professional tone」
+  - [ ] `chat`: 「保留口語、短句、casual tone、不過度修飾」
+  - [ ] `code`: 「保留 inline code 與技術術語、不重寫格式、不加標點到 code 中」
+  - [ ] `custom`: user-provided prompt（**1000 char cap**、reject if longer、UI 顯示 token estimate）
+- [ ] `plugins/llm_polish/vocabulary.rs`：
+  - [ ] 注入 `<vocabulary>t1, t2, ...</vocabulary>` 到 system prompt
+  - [ ] 與 M3 共用同一 vocabulary list（max 50 terms 或 600 chars）
+  - [ ] 提示詞「Preserve these specialized terms exactly as written」
+- [ ] `plugins/llm_polish/registry.rs`（model 清單）：
+  - [ ] `LLM_MODEL_LIST` ≥ 8 models（每 provider 1-3 個）
+  - [ ] `WHISPER_MODEL_LIST` Phase 1 cloud `whisper-large-v3-turbo`、local `ggml-base-q5_1`（M7）
+  - [ ] Helper：`find_llm_model_config`、`get_models_by_provider`、`get_default_model_id`
+- [ ] `PolishError` enum（thiserror + manual `Serialize`）：
+  - 認證：`ApiKeyMissing { provider }`
+  - 網路（mirror M3 拆細）：`Offline`、`Timeout`、`TlsFailure`、`ConnectionRefused`
+  - 服務：`RateLimited { retry_after_secs }`、`ApiError { status, body }`、`ParseError`、`Busy`
+  - 設定：`InvalidPromptLength { actual, max: 1000 }`
+  - 內部：`LockPoisoned`
+
+#### `useVoiceFlowStore` 整合
+
+- [ ] After transcribe success → 如果 polish ON → `transitionTo("enhancing")` → invoke `polish_text` → paste polished
+- [ ] Polish OFF → 直接 paste raw Whisper text
+- [ ] Polish 失敗 → fallback to raw Whisper text + emit `polish:failed-fallback` event（HUD 顯示 warning icon、Dashboard log）
+
+#### Settings UI
+
+- [ ] LLM polish toggle Switch（**預設 ON**）
+- [ ] LLM provider Select（4 個、獨立於 Whisper provider）
+- [ ] Model Select（filter by provider、預設 model 由 `get_default_model_id` 決定）
+- [ ] **Preset Select**：`default | email | chat | code | custom` 5 個 radio
+- [ ] Custom prompt textarea（**1000 char cap**、real-time char count、disabled if not custom mode）
+- [ ] Test 按鈕：invoke `polish_text("這個 呃 就是我覺得啊", vocabulary)` → show before/after diff（學 Typeless 的 polish 透明化）
+- [ ] **Per-step data-flow indicator**：「Audio → Groq Whisper → OpenAI Polish → Paste（無 retention）」清楚 render（避免 Typeless 隱私翻車）
+- [ ] **「測試連線」按鈕** extend：M3 ship Groq 版、M6 加 OpenAI / Anthropic / Gemini
+
+#### CSP + capabilities
+
+- [ ] CSP 加 `connect-src` for OpenAI / Anthropic / Gemini
+- [ ] Capability 加對應 URL pattern
+
+#### Tests
+
+- [ ] Rust unit tests（`wiremock`）：
+  - 4 個 provider 各 happy path 1 個
+  - 4 個 provider 各 401 / 429 / parse error mock
+  - `PromptMode` 5 個 → system prompt 字串對齊
+  - Custom prompt 1001 char → reject
+  - Vocabulary cap 邏輯
+- [ ] Integration test：raw text → polish → diff
 
 ### Acceptance criteria
 
-- ✅ Settings 切 4 個 provider 都 work
+- ✅ Settings 切 4 個 provider 都 work（test connection 全綠）
+- ✅ Settings 切 5 個 preset mode 都產出**明顯不同**的 polish 風格（手動驗證）
 - ✅ 中文「呃這個就是我覺得啊」polish 後變「我覺得這個還可以」之類
-- ✅ Polish OFF → 原始 Whisper 文字直接 paste
-- ✅ Polish 失敗（network / rate limit）→ fallback to 原始文字 + 顯示 warning
-- ✅ Vitest unit coverage > 70% on `lib/enhancer.ts` 與 `lib/llmProvider.ts`
+- ✅ Custom prompt 1001 chars → UI 拒絕儲存
+- ✅ Polish OFF → 原始 Whisper 文字直接 paste、polish 路徑完全跳過
+- ✅ Polish 失敗（network / rate limit）→ fallback to raw + HUD warning icon、不擋 paste
+- ✅ Polish 平均耗時：Groq < 2s p50、< 3s p95（dogfood log 驗證）
+- ✅ API key 全程在 Rust 進程：`grep -r "get_credential" src/` 結果為空（frontend 完全不呼叫 get_credential）
+- ✅ Rust unit coverage > 70% on `plugins/llm_polish/`
 
-### 預估時間：1 週
+### 預估時間：1.5 週（Q1 (a) 改 Rust-side、原 1 週 + 0.5 週 4-provider Rust client）
 
 ### 依賴：M5
 
