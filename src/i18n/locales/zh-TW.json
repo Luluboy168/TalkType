@@ -19,6 +19,18 @@
       "title": "IPC 連線測試",
       "sendPing": "發送 ping",
       "waiting": "等待 pong…"
+    },
+    "audioTest": {
+      "title": "錄音測試",
+      "start": "開始錄音",
+      "stop": "停止錄音",
+      "save": "存成 WAV",
+      "autoStop3s": "3 秒後自動停止",
+      "idle": "閒置",
+      "recording": "錄音中",
+      "stopped": "已停止",
+      "saved": "已存檔",
+      "error": "錯誤"
     }
   },
   "views": {
@@ -36,7 +48,15 @@
     },
     "settings": {
       "heading": "設定",
-      "description": "調整熱鍵、轉錄供應商、API 金鑰與其他偏好。"
+      "description": "調整熱鍵、轉錄供應商、API 金鑰與其他偏好。",
+      "audioInput": {
+        "title": "音訊輸入",
+        "deviceLabel": "輸入裝置",
+        "previewStart": "預覽",
+        "previewStop": "停止預覽",
+        "systemDefault": "系統預設",
+        "rmsLabel": "音量"
+      }
     },
     "guide": {
       "heading": "使用指南",
