@@ -30,6 +30,14 @@
 - **Subagent dispatch pattern 在 M0 證實 work**：sequential chunk + per-chunk reviewer + 最後 E2E。對下個 milestone（M1 雙視窗 / IPC）應該也適用，但 M4（hotkeys）/ M7（whisper.cpp）等高風險 milestone 可能需要 main agent 多介入 debug。
 - **Hooks 在 setup session 不會 fire**（`.claude/settings.json` 在啟動後才寫進去）— 下個 session 會自動拿到。值得在 README 寫一句「修 hooks 後重啟 session」。
 
+## 待考慮（M2 收穫，M3+ 用得到）
+
+- **`audio_recorder/mod.rs` 拆 `commands.rs`**：目前 418 行（8 行超過 400 budget），M3 加 transcribe* 之前順手把 8 個 `#[tauri::command]` 函式抽出去；mod.rs 只留 state + helper + tests。
+- **`tokio::task::spawn_blocking` for `fs::write` in `save_recording_file`**：當 WAV 檔變大（M3 cloud + 30s+ 錄音 → ~1MB+）時，sync `fs::write` 會擋住 tokio runtime。M9 polish 階段量測一下 latency，超過 50ms 就改 `spawn_blocking`。
+- **macOS Phase 2：cpal 同裝置雙 stream race**：M2 的 `AudioRecorderState` 與 `AudioPreviewState` 完全分離，Windows WASAPI 允許同裝置兩個 input stream、macOS CoreAudio 不允許。Phase 2 macOS 需要：preview 在 record start 時自動 stop（cross-state shared shutdown signal、或單一 trait + 一個 mutex 包兩個 state）。
+- **`<AudioRecordTest>` + `<IpcSmokeTest>` 用 `import.meta.env.DEV` gating**：M9 release prep 時統一加 `<template v-if="isDev">` wrapper（或直接 conditional import），避免 dev-only smoke 卡片進 production bundle。
+- **Vite-only mode `invoke` error UX**：M2 chunk 3 reviewer 點出 `SettingsView.vue` 在 vite-only 模式（`pnpm dev` 不開 Tauri runtime）會把「Cannot read properties of undefined (reading 'invoke')」當作紅色錯誤訊息直接 render 給 user 看。**較友善的解**：用 `if (window.__TAURI_INTERNALS__)` 或類似 Tauri runtime 探測，在 vite-only 改顯示「需要 Tauri runtime（pnpm tauri dev）才能列出裝置」。或者用 `<ErrorBoundary>` 包起來。M9 polish 一起處理。
+
 ## Phase 2 / 後期想法
 
 - **macOS dev setup**：目前 doc 只 describe 設計，沒實機跑過。Phase 2 啟動時要做 spike。

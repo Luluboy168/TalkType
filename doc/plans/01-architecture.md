@@ -1,7 +1,7 @@
 # 系統架構
 
-> **狀態**：Draft v1（M1 IPC contract 已落地）
-> **最後更新**：2026-05-02
+> **狀態**：Draft v1（M1 + M2 IPC contract 已落地）
+> **最後更新**：2026-05-03
 
 ## 高層架構圖
 
@@ -99,8 +99,15 @@
 | Command | Module | 用途 |
 |---|---|---|
 | `ping` | lib.rs (M1) | IPC smoke test：emit `ipc:pong` 給所有 window |
-| `start_recording` | audio_recorder | 啟動錄音 thread |
-| `stop_recording` | audio_recorder | 停止錄音、回 WAV bytes 與 metadata |
+| `start_recording` | audio_recorder (M2) | 啟動錄音 thread；`device_name: Option<String>` (`null` → cpal default) |
+| `stop_recording` | audio_recorder (M2) | 停止錄音、encode WAV 進 `wav_buffer`、回 `StopRecordingResult { durationMs, peakEnergyLevel, rmsEnergyLevel, sampleCount }` |
+| `list_audio_input_devices` | audio_recorder (M2) | 列出 mic：`Vec<AudioInputDeviceInfo { name, isDefault }>` |
+| `get_default_input_device_name` | audio_recorder (M2) | 取得 cpal 預設輸入裝置名稱：`Option<String>` |
+| `start_audio_preview` / `stop_audio_preview` | audio_recorder (M2) | Settings mic preview；`start` 接 `device_name: Option<String>`、emit `audio:preview-level` event |
+| `save_recording_file` | audio_recorder/files (M2) | 把 `wav_buffer` 寫到 `recordings/<id>.wav`；`id: Option<String>` (UUID v4 if `null`)；回相對路徑 |
+| `read_recording_file` | audio_recorder/files (M2) | 讀 `recordings/<id>.wav`；id 必須 parse 成 UUID（path-traversal defense）；回 `tauri::ipc::Response`（raw bytes） |
+| `delete_all_recordings` | audio_recorder/files (M2) | 刪除 `recordings/*.wav`、回刪除筆數 `u32` |
+| `cleanup_old_recordings` | audio_recorder/files (M2) | 刪除 mtime 超過 `days` 的 `*.wav`、回已刪除 id `Vec<String>` |
 | `transcribe_cloud` | transcription_cloud | 送 Groq Whisper 並回 raw text |
 | `transcribe_local` | transcription_local | 用 whisper.cpp 本地轉錄 |
 | `polish_text` | (Rust 不做、frontend 直接 fetch LLM API via plugin-http) | — |
@@ -111,8 +118,6 @@
 | `start_hotkey_recording` | hotkey_listener | 進入熱鍵錄製模式 |
 | `cancel_hotkey_recording` | hotkey_listener | 取消熱鍵錄製 |
 | `mute_system_audio` / `restore_system_audio` | audio_control | WASAPI mute |
-| `list_audio_input_devices` | audio_recorder | 列出 mic 給 settings |
-| `start_audio_preview` / `stop_audio_preview` | audio_recorder | Settings mic preview |
 | `play_start_sound` / `play_stop_sound` / `play_error_sound` | sound_feedback | 音效 |
 | `get_credential` / `set_credential` / `delete_credential` | credentials | API key 存取 Windows Credential Vault |
 | `get_settings` / `update_settings` | (Rust state) | 設定統一在 Rust |
@@ -135,8 +140,8 @@
 | `hotkey:recording-captured` | hotkey_listener | `{ keycode, modifiers }` |
 | `hotkey:recording-rejected` | hotkey_listener | `{ reason }` |
 | `escape:pressed` | hotkey_listener | `()` |
-| `audio:waveform` | audio_recorder | `{ levels: [f32; 6] }` ~60fps |
-| `audio:preview-level` | audio_recorder | `{ level: f32 }` ~33fps |
+| `audio:waveform` | audio_recorder (M2) | `WaveformPayload { levels: [f32; 6] }` ~60 fps（每 16 ms 一次）— 6 個正規化 FFT magnitude（Hann window + bins `[9, 4, 1, 2, 6, 12]`、`normalize_db(-100, -20)`） |
+| `audio:preview-level` | audio_recorder (M2) | `AudioPreviewLevelPayload { level: f32 }` ~33 fps（每 30 ms 一次）— RMS 振幅 `[0.0, 1.0]` |
 | `transcription:progress` | transcription_local | `{ percent: f32 }` (whisper.cpp) |
 | `model:download-progress` | transcription_local | `{ modelId, downloaded, total }` |
 | `settings:updated` | (lib.rs Rust state) | `Settings` snapshot |
