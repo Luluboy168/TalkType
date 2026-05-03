@@ -26,10 +26,28 @@ export type HotkeyErrorPayload = unknown;
 export type HotkeyRecordingCapturedPayload = unknown;
 export type HotkeyRecordingRejectedPayload = unknown;
 
-// ─── M2: audio recorder (placeholders — populated in M2) ───────────────────
+// ─── M2: audio recorder ────────────────────────────────────────────────────
 
-export type WaveformPayload = unknown;
-export type AudioPreviewLevelPayload = unknown;
+/**
+ * Payload of the `audio:waveform` event emitted ~every 16 ms while a
+ * recording is active. The 6 values are normalized FFT magnitudes ([0.0, 1.0])
+ * for hand-tuned frequency bins; index choice is intentionally non-linear
+ * for visual spread (see `src-tauri/src/plugins/audio_recorder/waveform.rs`).
+ */
+export interface WaveformPayload {
+  /** 6 normalized FFT magnitudes in `[0.0, 1.0]`. */
+  levels: [number, number, number, number, number, number];
+}
+
+/**
+ * Payload of the `audio:preview-level` event emitted ~every 30 ms while the
+ * mic preview is active. `level` is the RMS amplitude over the last ~30 ms
+ * window in `[0.0, 1.0]`.
+ */
+export interface AudioPreviewLevelPayload {
+  /** RMS amplitude over the latest ~30 ms window in `[0.0, 1.0]`. */
+  level: number;
+}
 
 // ─── M7: local transcription (placeholders — populated in M7) ──────────────
 

@@ -1,4 +1,4 @@
-// cpal stream construction for the audio recorder.
+// cpal stream construction helpers for the audio recorder + preview paths.
 //
 // Responsibilities:
 //   * Enumerate input devices (`list_input_devices`).
@@ -11,20 +11,24 @@
 //     device's `default_input_config()` when no 16 kHz path exists.
 //   * Build a typed `cpal::Stream` for any of the 10 cpal sample formats
 //     (`I8/I16/I32/I64/U8/U16/U32/U64/F32/F64`) and convert each callback's
-//     samples into mono `i16` pushed onto a shared buffer.
-//   * `run_recording_thread` — the named `"audio-recorder"` thread body that
-//     owns a single cpal `Stream` for the lifetime of one recording.
+//     samples into mono `i16`. Two output sinks are supported:
+//       1. Push into a shared `Arc<Mutex<Vec<i16>>>` buffer
+//          (`dispatch_sample_format` — used by recording).
+//       2. Hand the per-callback mono `i16` slice to a user closure
+//          (`dispatch_sample_format_with_callback` — used by preview, which
+//          accumulates into its own ring buffer).
 //
 // The cpal callback runs on cpal's internal audio thread (cpal 0.15 spawns
 // one per stream). Because `cpal::Stream: !Send + !Sync`, we cannot stash the
 // stream in a `tauri::State` slot — instead the stream lives entirely on the
-// `"audio-recorder"` thread that this module owns.
+// `"audio-recorder"` (recording) or `"audio-preview"` thread.
+//
+// The named `"audio-recorder"` thread body itself lives in
+// `recording_thread.rs` to keep this file focused on stream construction.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
+use std::sync::{Arc, Mutex};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Sample, SampleFormat, SizedSample, SupportedStreamConfig};
 use serde::Serialize;
 
@@ -268,93 +272,89 @@ pub fn dispatch_sample_format(
     }
 }
 
-// ─── Recording thread ──────────────────────────────────────────────────────
+// ─── Generic callback variant (re-used by preview path) ────────────────────
 
-/// Body of the named `"audio-recorder"` thread. Builds the cpal stream on
-/// this thread, plays it, parks until `should_stop` flips, then explicitly
-/// `pause()`s the stream (mic-safety contract) and drops it.
+/// Build a typed cpal input stream that converts each frame to mono `i16` and
+/// hands the resulting slice to a user-provided callback.
 ///
-/// `ack` is a single-shot mpsc sender used to report startup status back to
-/// the Tauri command thread:
-///   * `Ok(sample_rate)` once the stream is playing.
-///   * `Err(AudioRecorderError)` if any setup step failed.
-pub fn run_recording_thread(
-    device_name: Option<String>,
-    samples: Arc<Mutex<Vec<i16>>>,
-    should_stop: Arc<AtomicBool>,
-    ack: mpsc::Sender<StartAck>,
-) {
-    let host = cpal::default_host();
+/// The callback runs on cpal's audio thread. Keep work inside it bounded —
+/// preview's RMS aggregation acquires a single mutex and is fine; bigger work
+/// belongs in a separate thread reading from a ring buffer / channel.
+fn build_input_stream_with_callback<T, F>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    mut on_samples: F,
+) -> Result<cpal::Stream, AudioRecorderError>
+where
+    T: SizedSample + 'static,
+    f32: cpal::FromSample<T>,
+    F: FnMut(&[i16]) + Send + 'static,
+{
+    let channels = config.channels as usize;
+    let err_fn = |err| eprintln!("[audio-recorder] cpal stream error: {err}");
+    // Reusable scratch — sized for typical cpal buffer at 48 kHz mono ≈ 480 frames.
+    let mut scratch: Vec<i16> = Vec::with_capacity(2048);
 
-    let device = match select_input_device(&host, device_name.as_deref()) {
-        Ok(d) => d,
-        Err(e) => {
-            let _ = ack.send(Err(e));
-            return;
-        }
-    };
+    let stream = device
+        .build_input_stream(
+            config,
+            move |data: &[T], _info: &cpal::InputCallbackInfo| {
+                if data.is_empty() || channels == 0 {
+                    return;
+                }
+                scratch.clear();
+                scratch.reserve(data.len() / channels);
+                for frame in data.chunks_exact(channels) {
+                    let mut sum = 0.0_f32;
+                    for sample in frame {
+                        sum += f32::from_sample(*sample);
+                    }
+                    let mono = sum / channels as f32;
+                    let clamped = mono.clamp(-1.0, 1.0);
+                    let scaled = (clamped * i16::MAX as f32) as i16;
+                    scratch.push(scaled);
+                }
+                on_samples(&scratch);
+            },
+            err_fn,
+            None,
+        )
+        .map_err(|e| AudioRecorderError::BuildStream(e.to_string()))?;
 
-    let supported = match determine_input_config(&device) {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = ack.send(Err(e));
-            return;
-        }
-    };
-    let stream_config = supported.config();
-    let sample_rate = stream_config.sample_rate.0;
-
-    eprintln!(
-        "[audio-recorder] thread starting: device={:?} channels={} sample_rate={} sample_format={:?}",
-        device.name().ok(),
-        stream_config.channels,
-        sample_rate,
-        supported.sample_format()
-    );
-
-    let cpal_stream = match dispatch_sample_format(&device, &supported, samples) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = ack.send(Err(e));
-            return;
-        }
-    };
-
-    if let Err(e) = cpal_stream.play() {
-        let _ = ack.send(Err(AudioRecorderError::PlayStream(e.to_string())));
-        return;
-    }
-
-    // Stream is live — ack the caller with the negotiated sample rate.
-    if ack.send(Ok(sample_rate)).is_err() {
-        // Caller went away; tear the stream down immediately.
-        eprintln!("[audio-recorder] caller dropped ack rx; aborting recording");
-        if let Err(e) = cpal_stream.pause() {
-            eprintln!(
-                "[audio-recorder] SECURITY: stream.pause() failed — mic may still be active: {e}"
-            );
-        }
-        drop(cpal_stream);
-        return;
-    }
-
-    // Park until stop_recording flips the flag. cpal feeds the callback on
-    // its own audio thread, so this thread just needs to keep `cpal_stream`
-    // alive — we don't park forever, we busy-wait with a sleep so we react
-    // to should_stop in time. 16 ms is enough for M2; chunk 2 will use a
-    // tighter waveform-driven loop.
-    while !should_stop.load(Ordering::SeqCst) {
-        thread::sleep(std::time::Duration::from_millis(16));
-    }
-
-    // Mic-safety contract: pause BEFORE drop. cpal 0.15.x has an Arc-cycle
-    // bug on macOS where dropping the stream alone may not call
-    // `AudioOutputUnitStop`. If pause fails we continue (log SECURITY:) —
-    // dropping is still better than panicking.
-    if let Err(e) = cpal_stream.pause() {
-        eprintln!(
-            "[audio-recorder] SECURITY: stream.pause() failed — mic may still be active: {e}"
-        );
-    }
-    drop(cpal_stream);
+    Ok(stream)
 }
+
+/// Generic dispatch covering all 10 cpal sample formats. The callback receives
+/// per-callback mono `i16` slices already converted from whatever the device
+/// chose. Used by the preview path (it writes RMS samples to a ring buffer).
+pub fn dispatch_sample_format_with_callback<F>(
+    device: &cpal::Device,
+    supported: &SupportedStreamConfig,
+    on_samples: F,
+) -> Result<cpal::Stream, AudioRecorderError>
+where
+    F: FnMut(&[i16]) + Send + 'static,
+{
+    let stream_config = supported.config();
+
+    match supported.sample_format() {
+        SampleFormat::I8 => build_input_stream_with_callback::<i8, F>(device, &stream_config, on_samples),
+        SampleFormat::I16 => build_input_stream_with_callback::<i16, F>(device, &stream_config, on_samples),
+        SampleFormat::I32 => build_input_stream_with_callback::<i32, F>(device, &stream_config, on_samples),
+        SampleFormat::I64 => build_input_stream_with_callback::<i64, F>(device, &stream_config, on_samples),
+        SampleFormat::U8 => build_input_stream_with_callback::<u8, F>(device, &stream_config, on_samples),
+        SampleFormat::U16 => build_input_stream_with_callback::<u16, F>(device, &stream_config, on_samples),
+        SampleFormat::U32 => build_input_stream_with_callback::<u32, F>(device, &stream_config, on_samples),
+        SampleFormat::U64 => build_input_stream_with_callback::<u64, F>(device, &stream_config, on_samples),
+        SampleFormat::F32 => build_input_stream_with_callback::<f32, F>(device, &stream_config, on_samples),
+        SampleFormat::F64 => build_input_stream_with_callback::<f64, F>(device, &stream_config, on_samples),
+        other => Err(AudioRecorderError::BuildStream(format!(
+            "unsupported sample format: {other:?}"
+        ))),
+    }
+}
+
+// The named `"audio-recorder"` thread body lives in `recording_thread.rs`
+// (the FFT tick loop is sizeable enough to warrant its own module). Preview
+// uses `dispatch_sample_format_with_callback` above and runs its tick loop in
+// `preview.rs`.

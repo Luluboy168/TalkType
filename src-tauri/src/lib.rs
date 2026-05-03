@@ -144,6 +144,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_opener::init())
         .manage(audio_recorder::AudioRecorderState::new())
+        .manage(audio_recorder::AudioPreviewState::new())
         .setup(|app| {
             let handle = app.handle().clone();
             build_tray_icon(&handle)?;
@@ -167,6 +168,8 @@ pub fn run() {
             audio_recorder::stop_recording,
             audio_recorder::list_audio_input_devices,
             audio_recorder::get_default_input_device_name,
+            audio_recorder::preview::start_audio_preview,
+            audio_recorder::preview::stop_audio_preview,
             audio_recorder::files::save_recording_file,
             audio_recorder::files::read_recording_file,
             audio_recorder::files::delete_all_recordings,

@@ -44,7 +44,10 @@
 
 pub mod error;
 pub mod files;
+pub mod preview;
+pub mod recording_thread;
 pub mod stream;
+pub mod waveform;
 
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,9 +56,10 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 pub use error::AudioRecorderError;
+pub use preview::AudioPreviewState;
 pub use stream::{AudioInputDeviceInfo, StartAck};
 // NOTE: file-management Tauri commands live in `files.rs` and must be wired
 // via their full module path (`audio_recorder::files::save_recording_file`,
@@ -122,6 +126,7 @@ pub struct StopRecordingResult {
 /// where setup failed.
 #[tauri::command]
 pub async fn start_recording(
+    app: AppHandle,
     state: State<'_, AudioRecorderState>,
     device_name: Option<String>,
 ) -> Result<(), AudioRecorderError> {
@@ -145,11 +150,13 @@ pub async fn start_recording(
     let stop_flag = should_stop.clone();
     let samples_for_thread = samples.clone();
     let device_name_owned = device_name.clone();
+    let app_for_thread = app.clone();
 
     let thread_handle = thread::Builder::new()
         .name("audio-recorder".to_string())
         .spawn(move || {
-            stream::run_recording_thread(
+            recording_thread::run_recording_thread(
+                app_for_thread,
                 device_name_owned,
                 samples_for_thread,
                 stop_flag,
