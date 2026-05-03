@@ -1,9 +1,13 @@
 <script setup lang="ts">
 // Placeholder for /dashboard. M8 fills in the overview cards (recent
-// transcriptions, today's stats, etc.). M1 embeds the dev-only
-// <IpcSmokeTest> so contributors can verify the dual-window IPC contract.
+// transcriptions, today's stats, etc.). M1 embeds <IpcSmokeTest>; M2 also
+// embeds <AudioRecordTest> so contributors can verify the cpal recorder +
+// FFT waveform path without booting the full hotkey + voice flow stack.
+// Both cards are dev-only and will be retired (or hidden behind a debug
+// flag) in M9 polish.
 import { useI18n } from "vue-i18n";
 
+import AudioRecordTest from "@/components/AudioRecordTest.vue";
 import IpcSmokeTest from "@/components/IpcSmokeTest.vue";
 
 const { t } = useI18n();
@@ -20,5 +24,6 @@ const { t } = useI18n();
       </p>
     </header>
     <IpcSmokeTest />
+    <AudioRecordTest />
   </section>
 </template>

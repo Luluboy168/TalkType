@@ -33,6 +33,7 @@ logs/
 test-results/
 playwright-report/
 playwright/.auth/
+.playwright-mcp/
 coverage/
 
 # Tauri signing keys (NEVER commit)

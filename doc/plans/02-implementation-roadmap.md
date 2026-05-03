@@ -1,7 +1,7 @@
 # 實作 Roadmap
 
-> **狀態**：Draft v1
-> **最後更新**：2026-05-02
+> **狀態**：Draft v1（M0–M2 done）
+> **最後更新**：2026-05-03
 
 依 milestone 順序拆解 Phase 1 全部任務。每個 milestone 給：deliverable、tasks、acceptance criteria、預估時間、依賴。
 
@@ -11,7 +11,7 @@
 |---|---|---|---|
 | M0：Repo bootstrap | ✅ Done | 2026-05-02 | 2026-05-02 |
 | M1：基礎 IPC + 雙視窗 | ✅ Done | 2026-05-02 | 2026-05-02 |
-| M2：錄音 pipeline (Rust) | 📋 Planned | TBD | TBD |
+| M2：錄音 pipeline (Rust) | ✅ Done | 2026-05-03 | 2026-05-03 |
 | M3：Cloud transcription | 📋 Planned | TBD | TBD |
 | M4：全域熱鍵 + paste | 📋 Planned | TBD | TBD |
 | M5：HUD overlay | 📋 Planned | TBD | TBD |
@@ -105,37 +105,37 @@
 
 ### Tasks
 
-- [ ] 加 Cargo deps：`cpal 0.15`、`hound 3.5`、`rustfft 6`
-- [ ] `plugins/audio_recorder.rs`：
-  - [ ] `AudioRecorderState`（`Mutex<Option<RecordingHandle>>` + `pub(crate) Mutex<Option<Vec<u8>>>` for WAV）
-  - [ ] `start_recording(device_name) -> Result<()>` command
-  - [ ] `stop_recording() -> Result<StopRecordingResult>` command（回傳 duration_ms、peak_energy_level、rms_energy_level）
-  - [ ] `list_audio_input_devices() -> Vec<AudioInputDeviceInfo>`
-  - [ ] `get_default_input_device_name() -> Option<String>`
-  - [ ] cpal stream 在 named thread `"audio-recorder"`
-  - [ ] Sample format dispatch（10 種 cpal sample formats）
-  - [ ] WAV encode via `hound::WavWriter` to `Cursor` (in-memory)
-  - [ ] Energy level 計算（peak + RMS）
-- [ ] `plugins/audio_recorder.rs`：preview path
-  - [ ] `AudioPreviewState`
-  - [ ] `start_audio_preview(device_name) -> Result<()>`
-  - [ ] `stop_audio_preview() -> Result<()>`
-  - [ ] `audio:preview-level` event 每 30ms emit
-- [ ] FFT 6-band waveform：
-  - [ ] `audio:waveform` event 每 16ms emit `WaveformPayload { levels: [f32; 6] }`
-  - [ ] `normalize_db(-100..-20)` helper
-- [ ] File-management commands（檔案存 `app_data_dir/recordings/<uuid>.wav`）：
-  - [ ] `save_recording_file(id) -> Result<String>`
-  - [ ] `read_recording_file(id) -> Result<tauri::ipc::Response>`
-  - [ ] `delete_all_recordings() -> u32`
-  - [ ] `cleanup_old_recordings(days) -> Vec<String>`
-- [ ] `AudioRecorderError` (thiserror enum + manual Serialize as string)
-- [ ] **Defense**：`stream.pause()` 後再 drop（cpal Arc-cycle bug 防護）
-- [ ] **Mic safety log**：pause failure 印 `SECURITY:` log
-- [ ] Rust unit tests：`encode_wav`、`normalize_db`
-- [ ] Frontend `useAudioPreview.ts` composable 用 RAF + lerp(0.2)
-- [ ] Frontend `useAudioWaveform.ts` composable 用 RAF + lerp(0.25)
-- [ ] Settings page 簡化版 mic picker：列裝置 + 點選即時 preview
+- [x] 加 Cargo deps：`cpal 0.15`、`hound 3.5`、`rustfft 6`
+- [x] `plugins/audio_recorder.rs`：
+  - [x] `AudioRecorderState`（`Mutex<Option<RecordingHandle>>` + `pub(crate) Mutex<Option<Vec<u8>>>` for WAV）
+  - [x] `start_recording(device_name) -> Result<()>` command
+  - [x] `stop_recording() -> Result<StopRecordingResult>` command（回傳 duration_ms、peak_energy_level、rms_energy_level）
+  - [x] `list_audio_input_devices() -> Vec<AudioInputDeviceInfo>`
+  - [x] `get_default_input_device_name() -> Option<String>`
+  - [x] cpal stream 在 named thread `"audio-recorder"`
+  - [x] Sample format dispatch（10 種 cpal sample formats）
+  - [x] WAV encode via `hound::WavWriter` to `Cursor` (in-memory)
+  - [x] Energy level 計算（peak + RMS）
+- [x] `plugins/audio_recorder.rs`：preview path
+  - [x] `AudioPreviewState`
+  - [x] `start_audio_preview(device_name) -> Result<()>`
+  - [x] `stop_audio_preview() -> Result<()>`
+  - [x] `audio:preview-level` event 每 30ms emit
+- [x] FFT 6-band waveform：
+  - [x] `audio:waveform` event 每 16ms emit `WaveformPayload { levels: [f32; 6] }`
+  - [x] `normalize_db(-100..-20)` helper
+- [x] File-management commands（檔案存 `app_data_dir/recordings/<uuid>.wav`）：
+  - [x] `save_recording_file(id) -> Result<String>`
+  - [x] `read_recording_file(id) -> Result<tauri::ipc::Response>`
+  - [x] `delete_all_recordings() -> u32`
+  - [x] `cleanup_old_recordings(days) -> Vec<String>`
+- [x] `AudioRecorderError` (thiserror enum + manual Serialize as string)
+- [x] **Defense**：`stream.pause()` 後再 drop（cpal Arc-cycle bug 防護）
+- [x] **Mic safety log**：pause failure 印 `SECURITY:` log
+- [x] Rust unit tests：`encode_wav`、`normalize_db`
+- [x] Frontend `useAudioPreview.ts` composable 用 RAF + lerp(0.2)
+- [x] Frontend `useAudioWaveform.ts` composable 用 RAF + lerp(0.25)
+- [x] Settings page 簡化版 mic picker：列裝置 + 點選即時 preview
 
 ### Acceptance criteria
 

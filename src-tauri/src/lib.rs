@@ -1,14 +1,21 @@
 // TalkType Tauri orchestrator (lib.rs).
 //
-// Phase 1, M1 (基礎 IPC + 雙視窗):
-//   - Two windows: HUD (`main`, transparent overlay) + Dashboard (`main-window`).
-//   - Tray icon with "Open Dashboard" + "Quit" menu items, left-click focuses Dashboard.
-//   - Single-instance plugin so a second launch refocuses the Dashboard.
-//   - Single Tauri command (`ping`) emits a `ipc:pong` event for cross-window IPC smoke test.
-//   - Dashboard close-request is intercepted -> hide instead of destroy (only tray "Quit" exits).
+// Phase 1 progress:
+//   - M1 (basic IPC + dual window) — done
+//   - M2 (audio recorder pipeline) — chunk 1 wires the audio_recorder plugin
+//     state + commands here; the FFT waveform / preview path land in chunk 2.
 //
-// Future modules (settings.rs, plugins/*) will be added in subsequent milestones; this file
-// keeps a tight ~150-line orchestrator budget per doc/plans/03-rust-modules.md.
+// Window layout: HUD (`main`, transparent overlay) + Dashboard (`main-window`).
+// Tray icon with "Open Dashboard" + "Quit" menu items, left-click focuses
+// Dashboard. Single-instance plugin so a second launch refocuses the Dashboard.
+// Dashboard close-request is intercepted -> hide instead of destroy (only tray
+// "Quit" exits).
+//
+// Future modules (settings.rs, additional plugins) will be added in subsequent
+// milestones; this file aims for the ~300-line orchestrator budget per
+// doc/plans/03-rust-modules.md.
+
+pub mod plugins;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,6 +26,8 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, WindowEvent,
 };
+
+use plugins::audio_recorder;
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -134,6 +143,8 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_opener::init())
+        .manage(audio_recorder::AudioRecorderState::new())
+        .manage(audio_recorder::AudioPreviewState::new())
         .setup(|app| {
             let handle = app.handle().clone();
             build_tray_icon(&handle)?;
@@ -151,7 +162,19 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![ping])
+        .invoke_handler(tauri::generate_handler![
+            ping,
+            audio_recorder::start_recording,
+            audio_recorder::stop_recording,
+            audio_recorder::list_audio_input_devices,
+            audio_recorder::get_default_input_device_name,
+            audio_recorder::preview::start_audio_preview,
+            audio_recorder::preview::stop_audio_preview,
+            audio_recorder::files::save_recording_file,
+            audio_recorder::files::read_recording_file,
+            audio_recorder::files::delete_all_recordings,
+            audio_recorder::files::cleanup_old_recordings,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
