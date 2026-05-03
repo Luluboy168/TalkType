@@ -239,11 +239,15 @@ Phase 1 設好以下 hooks（學 SayIt）：
 2. **Dispatch subagents（Opus 4.7）執行實作**：每個子任務派遣 subagent 處理（指定 `model: opus`），主 session 不直接寫 code
 3. **完成後 dispatch subagents（Opus 4.7）做 code review + 功能測試**：每個 feature / 任務完成後，派另一組 subagent（`model: opus`，可用 `superpowers:code-reviewer`）進行獨立 code review 與功能測試 — 避免 implementer 自己 review 的盲點
 4. **UI 變更必須截圖驗證**：若涉及 UI，subagent 必須用 Playwright 截圖並用 Read 工具檢視（或附給主 session 檢視），確認 UI 符合預期才算完成
+5. **Plan-time challenger（每個 milestone 開工前）**：與「拆計畫」**同一則 message 平行** dispatch 一個 challenger subagent（Opus 4.7、`general-purpose`），讀同樣的 spec，從 perf / UX / 安全 / 邊界條件 / 可測試性 / 依賴假設下手提出「沒考慮過的問題」。主 session 把 challenger 的 findings 對照計畫、**修計畫後**才 dispatch 真 implementer。修計畫比修代碼便宜。
+6. **Retro challenger（每個 milestone 完成後）**：dispatch 一個 challenger subagent 讀完整 session log + 對應 commits，產出「latent 問題 / UX 缺口 / perf 風險」清單，append 進 `.claude/IDEAS.md`，抓 chunk-by-chunk reviewer 漏掉的整體性問題。
 
 **為什麼**：
 - 主 session 的 context 寶貴，subagent 可隔離執行重活、平行加速
 - Independent reviewer 比 implementer 更容易發現 bug 與設計問題
 - UI 視覺檢查比 type check 可靠（type check 過 ≠ UI 對）
+- Reviewer 看「程式碼正不正確」、Challenger 看「計畫對不對 / 整體有沒有 latent 問題」— 兩者覆蓋不同盲區，不重複工
+- Plan-time challenger 在 implementer 開工前介入，避免錯誤計畫被忠實實作出來；Retro challenger 在 milestone 完成後總結，把 chunk-level reviewer 抓不到的整體性問題沉澱成下個 milestone 可參考的 IDEAS
 
 ## 工作流程提醒
 
