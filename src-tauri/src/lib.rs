@@ -164,14 +164,16 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
-            audio_recorder::start_recording,
-            audio_recorder::stop_recording,
-            audio_recorder::list_audio_input_devices,
-            audio_recorder::get_default_input_device_name,
+            audio_recorder::commands::start_recording,
+            audio_recorder::commands::stop_recording,
+            audio_recorder::commands::clear_recording_buffer,
+            audio_recorder::commands::list_audio_input_devices,
+            audio_recorder::commands::get_default_input_device_name,
             audio_recorder::preview::start_audio_preview,
             audio_recorder::preview::stop_audio_preview,
             audio_recorder::files::save_recording_file,
             audio_recorder::files::read_recording_file,
+            audio_recorder::files::delete_recording,
             audio_recorder::files::delete_all_recordings,
             audio_recorder::files::cleanup_old_recordings,
         ])

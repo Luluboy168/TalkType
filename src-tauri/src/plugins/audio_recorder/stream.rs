@@ -26,6 +26,7 @@
 // The named `"audio-recorder"` thread body itself lives in
 // `recording_thread.rs` to keep this file focused on stream construction.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait};
@@ -194,19 +195,37 @@ pub fn determine_input_config(
 /// Build a typed cpal input stream that converts every callback into mono
 /// `i16` and appends to `samples`.
 ///
+/// `mic_disconnected` (when `Some`) is set to `true` from the cpal `err_fn`
+/// callback whenever a stream-level error fires — which on Windows / WASAPI
+/// includes mic unplug, default-device change while recording, and similar
+/// device-loss conditions. The recording thread polls this flag each tick
+/// and aborts cleanly with `audio:recording-aborted { reason: 'mic_unplug' }`.
+/// Pass `None` for paths that don't surface disconnects (e.g. preview, where
+/// the worst case is a silent stream until the user closes the panel).
+///
 /// This is monomorphized for each `cpal::SizedSample` type via
 /// `dispatch_sample_format` below.
 fn build_input_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     samples: Arc<Mutex<Vec<i16>>>,
+    mic_disconnected: Option<Arc<AtomicBool>>,
 ) -> Result<cpal::Stream, AudioRecorderError>
 where
     T: SizedSample + 'static,
     f32: cpal::FromSample<T>,
 {
     let channels = config.channels as usize;
-    let err_fn = |err| eprintln!("[audio-recorder] cpal stream error: {err}");
+    let err_fn = move |err| {
+        eprintln!("[audio-recorder] cpal stream error: {err}");
+        // Treat any stream-level cpal error as a mic-disconnect for UX
+        // purposes — cpal 0.15 on Windows surfaces "device went away" via
+        // `BackendSpecific` and we can't reliably differentiate. Better to
+        // overstop than to keep recording silence and look broken.
+        if let Some(flag) = mic_disconnected.as_ref() {
+            flag.store(true, Ordering::SeqCst);
+        }
+    };
 
     let stream = device
         .build_input_stream(
@@ -248,24 +267,48 @@ where
 
 /// Build an input stream regardless of which `cpal::SampleFormat` the device
 /// chose. Covers all 10 sample formats cpal currently supports.
+///
+/// `mic_disconnected` is forwarded to `build_input_stream` — see that fn's
+/// docs for the disconnect-detection contract.
 pub fn dispatch_sample_format(
     device: &cpal::Device,
     supported: &SupportedStreamConfig,
     samples: Arc<Mutex<Vec<i16>>>,
+    mic_disconnected: Option<Arc<AtomicBool>>,
 ) -> Result<cpal::Stream, AudioRecorderError> {
     let stream_config = supported.config();
 
     match supported.sample_format() {
-        SampleFormat::I8 => build_input_stream::<i8>(device, &stream_config, samples),
-        SampleFormat::I16 => build_input_stream::<i16>(device, &stream_config, samples),
-        SampleFormat::I32 => build_input_stream::<i32>(device, &stream_config, samples),
-        SampleFormat::I64 => build_input_stream::<i64>(device, &stream_config, samples),
-        SampleFormat::U8 => build_input_stream::<u8>(device, &stream_config, samples),
-        SampleFormat::U16 => build_input_stream::<u16>(device, &stream_config, samples),
-        SampleFormat::U32 => build_input_stream::<u32>(device, &stream_config, samples),
-        SampleFormat::U64 => build_input_stream::<u64>(device, &stream_config, samples),
-        SampleFormat::F32 => build_input_stream::<f32>(device, &stream_config, samples),
-        SampleFormat::F64 => build_input_stream::<f64>(device, &stream_config, samples),
+        SampleFormat::I8 => {
+            build_input_stream::<i8>(device, &stream_config, samples, mic_disconnected)
+        }
+        SampleFormat::I16 => {
+            build_input_stream::<i16>(device, &stream_config, samples, mic_disconnected)
+        }
+        SampleFormat::I32 => {
+            build_input_stream::<i32>(device, &stream_config, samples, mic_disconnected)
+        }
+        SampleFormat::I64 => {
+            build_input_stream::<i64>(device, &stream_config, samples, mic_disconnected)
+        }
+        SampleFormat::U8 => {
+            build_input_stream::<u8>(device, &stream_config, samples, mic_disconnected)
+        }
+        SampleFormat::U16 => {
+            build_input_stream::<u16>(device, &stream_config, samples, mic_disconnected)
+        }
+        SampleFormat::U32 => {
+            build_input_stream::<u32>(device, &stream_config, samples, mic_disconnected)
+        }
+        SampleFormat::U64 => {
+            build_input_stream::<u64>(device, &stream_config, samples, mic_disconnected)
+        }
+        SampleFormat::F32 => {
+            build_input_stream::<f32>(device, &stream_config, samples, mic_disconnected)
+        }
+        SampleFormat::F64 => {
+            build_input_stream::<f64>(device, &stream_config, samples, mic_disconnected)
+        }
         other => Err(AudioRecorderError::BuildStream(format!(
             "unsupported sample format: {other:?}"
         ))),

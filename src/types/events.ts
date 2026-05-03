@@ -49,6 +49,42 @@ export interface AudioPreviewLevelPayload {
   level: number;
 }
 
+/**
+ * Reason values for `RecordingAbortedPayload.reason`. Mirrors the Rust-side
+ * `recording_aborted_reason` consts in `audio_recorder/events.rs`.
+ *
+ * Forward-compatible: M3+ may add new variants (e.g. `'busy'`, `'permission'`)
+ * without breaking listeners that handle the union.
+ */
+export type RecordingAbortedReason = "max_size" | "mic_unplug";
+
+/**
+ * Payload of the `audio:recording-aborted` event. Fired from Rust when an
+ * in-progress recording auto-stops because the i16 buffer hit
+ * `MAX_WAV_BYTES` (~25 MB / ~13 min @ 16 kHz mono) or because cpal reported
+ * a stream error consistent with mic disconnection.
+ */
+export interface RecordingAbortedPayload {
+  /** Why the recording was aborted. */
+  reason: RecordingAbortedReason;
+  /** Bytes in the i16 sample buffer at abort time (`sampleCount * 2`). */
+  bytesRecorded: number;
+}
+
+/**
+ * Payload of the `audio:mic-safety-warning` event. Fired from Rust when
+ * `cpal::Stream::pause()` returns an error during teardown — a SECURITY-
+ * relevant condition because it suggests the mic stream may not have been
+ * fully torn down. The M2 retro flagged that the matching `eprintln!` is
+ * invisible in release builds (stderr → /dev/null), so this event provides
+ * a release-friendly alternative path for the HUD / error panel to surface
+ * the warning.
+ */
+export interface MicSafetyPayload {
+  /** Free-form human-readable detail (cpal pause error message). */
+  detail: string;
+}
+
 // ─── M7: local transcription (placeholders — populated in M7) ──────────────
 
 export type TranscriptionProgressPayload = unknown;

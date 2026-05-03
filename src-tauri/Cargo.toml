@@ -27,9 +27,20 @@ cpal = "0.15"
 hound = "3.5"
 uuid = { version = "1", features = ["v4"] }
 rustfft = "6"
+# `rt` feature is needed for `tokio::task::spawn_blocking`. Tauri pulls tokio
+# in transitively but only with default features (none of `rt`/`rt-multi-thread`),
+# so we promote it to a direct dep here. Tauri's command runtime is itself
+# tokio-based so this stays ABI-compatible.
+tokio = { version = "1", features = ["rt"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
+
+[dev-dependencies]
+# `tempfile` powers the M3 chunk-0 filesystem integration tests in
+# `plugins/audio_recorder/files.rs`. Stays out of the release build via
+# the `dev-dependencies` table.
+tempfile = "3"
 
 [profile.release]
 panic = "abort"

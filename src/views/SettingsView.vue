@@ -15,7 +15,7 @@
 //     explicit invoke).
 
 import { invoke } from "@tauri-apps/api/core";
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,14 @@ const devices = ref<AudioInputDeviceInfo[]>([]);
 const selectedDevice = ref<string>(SYSTEM_DEFAULT);
 const previewActive = ref(false);
 const lastError = ref<string | null>(null);
+/**
+ * Guards against double-invokes during the async invoke + listener
+ * register/unregister window. Without this, a fast user double-click on
+ * "Start preview" / "Stop preview" can fire two `start_audio_preview`
+ * commands and Rust returns `audio preview already running` on the second
+ * (M2 retro UX gap #1). Watcher-driven device switches set this too.
+ */
+const inFlight = ref(false);
 
 const { smoothedLevel, start: startPreviewListener, stop: stopPreviewListener } =
   useAudioPreview();
@@ -74,30 +82,76 @@ async function loadDevices(): Promise<void> {
 }
 
 async function togglePreview(): Promise<void> {
+  // Idempotency guard: ignore re-entrant clicks while the previous
+  // invoke is still in flight (M2 retro UX gap #1).
+  if (inFlight.value) return;
+  inFlight.value = true;
   lastError.value = null;
-  if (previewActive.value) {
+  try {
+    if (previewActive.value) {
+      try {
+        await invoke<void>("stop_audio_preview");
+      } catch (err) {
+        lastError.value = err instanceof Error ? err.message : String(err);
+        console.error("[settings] stop_audio_preview failed:", err);
+      } finally {
+        stopPreviewListener();
+        previewActive.value = false;
+      }
+      return;
+    }
+    try {
+      await invoke<void>("start_audio_preview", {
+        deviceName: resolvedDeviceName.value,
+      });
+      await startPreviewListener();
+      previewActive.value = true;
+    } catch (err) {
+      lastError.value = err instanceof Error ? err.message : String(err);
+      console.error("[settings] start_audio_preview failed:", err);
+    }
+  } finally {
+    inFlight.value = false;
+  }
+}
+
+/**
+ * Watch the dropdown selection: when the user picks a different mic while a
+ * preview is running, stop the old preview and (re-)start with the new device.
+ * Without this, the old cpal stream stays attached to the old mic and the
+ * device picker silently lies to the user (M2 retro UX gap #2).
+ *
+ * `inFlight` guard: if a togglePreview is already running we skip — by the
+ * time it returns, `selectedDevice` has already changed and the next user
+ * click will pick up the new value.
+ */
+watch(selectedDevice, async (next, prev) => {
+  if (next === prev) return;
+  if (!previewActive.value) return;
+  if (inFlight.value) return;
+  inFlight.value = true;
+  try {
     try {
       await invoke<void>("stop_audio_preview");
     } catch (err) {
-      lastError.value = err instanceof Error ? err.message : String(err);
-      console.error("[settings] stop_audio_preview failed:", err);
-    } finally {
-      stopPreviewListener();
-      previewActive.value = false;
+      console.warn("[settings] stop_audio_preview during switch:", err);
     }
-    return;
+    stopPreviewListener();
+    try {
+      await invoke<void>("start_audio_preview", {
+        deviceName: resolvedDeviceName.value,
+      });
+      await startPreviewListener();
+      previewActive.value = true;
+    } catch (err) {
+      lastError.value = err instanceof Error ? err.message : String(err);
+      previewActive.value = false;
+      console.error("[settings] start_audio_preview after switch failed:", err);
+    }
+  } finally {
+    inFlight.value = false;
   }
-  try {
-    await invoke<void>("start_audio_preview", {
-      deviceName: resolvedDeviceName.value,
-    });
-    await startPreviewListener();
-    previewActive.value = true;
-  } catch (err) {
-    lastError.value = err instanceof Error ? err.message : String(err);
-    console.error("[settings] start_audio_preview failed:", err);
-  }
-}
+});
 
 onMounted(() => {
   void loadDevices();

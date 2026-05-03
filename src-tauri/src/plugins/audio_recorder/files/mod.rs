@@ -9,11 +9,14 @@
 //   `stop_recording`  → encode WAV → stash in `state.wav_buffer`
 //   `save_recording_file(id?)` → clone bytes from `state.wav_buffer` → write
 //       `recordings/<id>.wav` → return relative path string
+//   `delete_recording(id)` → remove a single `recordings/<id>.wav` (M3
+//       chunk 0, M2 retro: previously only `delete_all_recordings` existed)
 //
 // The buffer remains in memory after `save_recording_file` (we clone, we
 // don't `take()`) so M3's transcribe pipeline can still consume it via
-// `take()`. Whichever command is the last to touch `wav_buffer` is responsible
-// for clearing it; M3 will revisit the orchestration here.
+// `consume_wav_buffer` / `clear_recording_buffer`. M3's transcribe is the
+// designated last consumer; until then `clear_recording_buffer` is the
+// frontend escape hatch (M2 retro #3 — RAM hygiene).
 
 use std::fs;
 use std::path::PathBuf;
@@ -118,6 +121,22 @@ pub async fn read_recording_file(
     Ok(Response::new(bytes))
 }
 
+/// Delete a single recording by id. Returns `RecordingNotFound(id)` if the
+/// file does not exist (rather than silently succeeding) so the UI can show
+/// "already deleted" as a distinct outcome from "deleted now".
+///
+/// `id` MUST parse as a UUID — same path-traversal defense as
+/// `read_recording_file`.
+#[tauri::command]
+pub async fn delete_recording(app: AppHandle, id: String) -> Result<(), AudioRecorderError> {
+    let path = recording_path(&app, &id)?;
+    if !path.exists() {
+        return Err(AudioRecorderError::RecordingNotFound(id));
+    }
+    fs::remove_file(&path).map_err(|e| AudioRecorderError::FileIo(e.to_string()))?;
+    Ok(())
+}
+
 /// Delete every `*.wav` file in the recordings directory and return the count
 /// of files removed.
 #[tauri::command]
@@ -147,6 +166,18 @@ pub async fn delete_all_recordings(app: AppHandle) -> Result<u32, AudioRecorderE
 
 /// Delete WAV files older than `days`. Returns the list of deleted recording
 /// IDs (file stems, without the `.wav` extension).
+///
+/// **Edge case (M2 retro)**: `days == 0` effectively means "delete every
+/// file whose mtime is at or before now" — i.e. all of them, since the
+/// cutoff equals `SystemTime::now()` and the comparison is `mtime > cutoff`
+/// (strictly greater). This is surprising but matches the "older than zero
+/// days" reading. If a caller wants explicit "delete all" semantics they
+/// should call `delete_all_recordings` (which is independent of mtime).
+///
+/// FIXME (M9 polish): consider rejecting `days == 0` with `InvalidArg` or
+/// requiring `days >= 1` to avoid surprises. For Phase 1 the behavior is
+/// documented and the only call site (Settings auto-cleanup) feeds in
+/// `auto_cleanup_recordings_days >= 1`.
 #[tauri::command]
 pub async fn cleanup_old_recordings(
     app: AppHandle,
@@ -196,3 +227,52 @@ pub async fn cleanup_old_recordings(
     }
     Ok(deleted)
 }
+
+// ─── Internal helpers exposed for tests ────────────────────────────────────
+
+/// Filesystem-only counterpart to `cleanup_old_recordings` that takes an
+/// already-resolved `recordings/` directory. Lifted out so tempfile-based
+/// integration tests can exercise the cleanup logic without a Tauri
+/// `AppHandle` (which would need a full app context).
+#[cfg(test)]
+fn cleanup_old_recordings_in_dir(
+    dir: &std::path::Path,
+    days: u32,
+) -> Result<Vec<String>, AudioRecorderError> {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(AudioRecorderError::FileIo(e.to_string())),
+    };
+
+    let cutoff = SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(u64::from(days) * 86_400))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    let mut deleted = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("wav") {
+            continue;
+        }
+        let mtime = match entry.metadata().and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if mtime > cutoff {
+            continue;
+        }
+        let id = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        if fs::remove_file(&path).is_ok() {
+            deleted.push(id);
+        }
+    }
+    Ok(deleted)
+}
+
+#[cfg(test)]
+mod tests;
+

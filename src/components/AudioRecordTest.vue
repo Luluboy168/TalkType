@@ -158,6 +158,15 @@ onUnmounted(() => {
     });
     stopWaveform();
   }
+  // M3 chunk 0 (M2 retro #3): if the user stopped recording but never saved,
+  // the WAV bytes are still sitting in `AudioRecorderState::wav_buffer` —
+  // ask Rust to drop them so we don't keep ~50 MB pinned across navigation.
+  // Best-effort: don't await, don't escalate failures (no cleanup is fine).
+  if (status.value === "stopped") {
+    void invoke<unknown>("clear_recording_buffer").catch((err) => {
+      console.warn("[audio-test] clear_recording_buffer during unmount:", err);
+    });
+  }
 });
 </script>
 

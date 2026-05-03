@@ -107,6 +107,7 @@
 | `save_recording_file` | audio_recorder/files (M2) | 把 `wav_buffer` 寫到 `recordings/<id>.wav`；`id: Option<String>` (UUID v4 if `null`)；回相對路徑 |
 | `read_recording_file` | audio_recorder/files (M2) | 讀 `recordings/<id>.wav`；id 必須 parse 成 UUID（path-traversal defense）；回 `tauri::ipc::Response`（raw bytes） |
 | `delete_all_recordings` | audio_recorder/files (M2) | 刪除 `recordings/*.wav`、回刪除筆數 `u32` |
+| `delete_recording` | audio_recorder/files (M3) | 刪除單一 `recordings/<id>.wav`（id 必須 parse 成 UUID）、`RecordingNotFound` 若不存在（M2 retro 收尾） |
 | `cleanup_old_recordings` | audio_recorder/files (M2) | 刪除 mtime 超過 `days` 的 `*.wav`、回已刪除 id `Vec<String>` |
 | `transcribe_audio` | transcription | dispatcher：依 settings 派 cloud / local（M3 ship cloud） |
 | `transcribe_cloud` | transcription/cloud (M3) | 內部：送 Groq Whisper、`transcribe_busy` guard、emit `transcription:completed` |
