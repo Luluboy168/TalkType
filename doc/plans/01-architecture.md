@@ -1,6 +1,6 @@
 # 系統架構
 
-> **狀態**：Draft v1
+> **狀態**：Draft v1（M1 IPC contract 已落地）
 > **最後更新**：2026-05-02
 
 ## 高層架構圖
@@ -98,6 +98,7 @@
 
 | Command | Module | 用途 |
 |---|---|---|
+| `ping` | lib.rs (M1) | IPC smoke test：emit `ipc:pong` 給所有 window |
 | `start_recording` | audio_recorder | 啟動錄音 thread |
 | `stop_recording` | audio_recorder | 停止錄音、回 WAV bytes 與 metadata |
 | `transcribe_cloud` | transcription_cloud | 送 Groq Whisper 並回 raw text |
@@ -126,6 +127,7 @@
 
 | Event | Source | Payload |
 |---|---|---|
+| `ipc:pong` | lib.rs (M1) | `PongPayload { source: string, timestampMs: number }` — 由 `ping` command 全域 emit |
 | `hotkey:pressed` | hotkey_listener | `HotkeyEventPayload { mode, action }` |
 | `hotkey:released` | hotkey_listener | `HotkeyEventPayload` |
 | `hotkey:toggled` | hotkey_listener | `HotkeyEventPayload` |

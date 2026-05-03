@@ -6,4 +6,7 @@ declare module "*.vue" {
   export default component;
 }
 
+// CSS-only side-effect imports from @fontsource-variable/* don't ship .d.ts.
+declare module "@fontsource-variable/*";
+
 declare const __APP_VERSION__: string;

@@ -30,6 +30,12 @@ export default defineConfig({
   // ensure compatibility with the embedded webview runtime
   build: {
     target: ["es2021", "chrome105", "safari13"],
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        "main-window": fileURLToPath(new URL("./main-window.html", import.meta.url)),
+      },
+    },
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

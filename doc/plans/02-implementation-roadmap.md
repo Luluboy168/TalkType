@@ -10,7 +10,7 @@
 | Milestone | 狀態 | 起 | 訖 |
 |---|---|---|---|
 | M0：Repo bootstrap | ✅ Done | 2026-05-02 | 2026-05-02 |
-| M1：基礎 IPC + 雙視窗 | 📋 Planned | TBD | TBD |
+| M1：基礎 IPC + 雙視窗 | ✅ Done | 2026-05-02 | 2026-05-02 |
 | M2：錄音 pipeline (Rust) | 📋 Planned | TBD | TBD |
 | M3：Cloud transcription | 📋 Planned | TBD | TBD |
 | M4：全域熱鍵 + paste | 📋 Planned | TBD | TBD |
@@ -68,23 +68,23 @@
 
 ### Tasks
 
-- [ ] 設 `tauri.conf.json` 兩個 windows：`main`（HUD）+ `main-window`（Dashboard）
-- [ ] HUD：transparent、alwaysOnTop、skipTaskbar、無 decorations、預設 hidden、無 focus
-- [ ] Dashboard：normal decorated、預設 hidden、centered、min size 720×480
-- [ ] 加 `index.html` + `main-window.html` + `src/main.ts` + `src/main-window.ts`
-- [ ] Vite `rollupOptions.input` 兩個 entry
-- [ ] HUD App.vue：簡單顯示「TalkType HUD」字樣
-- [ ] Dashboard MainApp.vue：Sidebar + RouterView，五個 placeholder routes
-- [ ] 加 vue-router (hash mode) 在 Dashboard
-- [ ] 加 Pinia 在兩個 entry
-- [ ] 加 vue-i18n 在兩個 entry，最小 zh-TW + en messages
-- [ ] Rust：`lib.rs` 寫 `setup` callback 配置兩個視窗
-- [ ] Rust：tray icon（embedded PNG via `include_bytes!`）+ menu (open dashboard / quit)
-- [ ] Rust：實作 `ping` command 與 `pong` event 做 IPC smoke test
-- [ ] Frontend：寫 ping/pong 測試，確認 cross-window event 通
-- [ ] Single-instance plugin 註冊（第二次啟動 focus dashboard）
-- [ ] Capabilities：拆 `hud.json` 與 `dashboard.json` 兩個 file
-- [ ] `useTauriEvents.ts` composable 設好（centralized event constants）
+- [x] 設 `tauri.conf.json` 兩個 windows：`main`（HUD）+ `main-window`（Dashboard）
+- [x] HUD：transparent、alwaysOnTop、skipTaskbar、無 decorations、預設 hidden、無 focus
+- [x] Dashboard：normal decorated、預設 hidden、centered、min size 720×480
+- [x] 加 `index.html` + `main-window.html` + `src/main.ts` + `src/main-window.ts`
+- [x] Vite `rollupOptions.input` 兩個 entry
+- [x] HUD App.vue：簡單顯示「TalkType HUD」字樣
+- [x] Dashboard MainApp.vue：Sidebar + RouterView，五個 placeholder routes
+- [x] 加 vue-router (hash mode) 在 Dashboard
+- [x] 加 Pinia 在兩個 entry
+- [x] 加 vue-i18n 在兩個 entry，最小 zh-TW + en messages
+- [x] Rust：`lib.rs` 寫 `setup` callback 配置兩個視窗
+- [x] Rust：tray icon（embedded PNG via `include_bytes!`）+ menu (open dashboard / quit)
+- [x] Rust：實作 `ping` command 與 `pong` event 做 IPC smoke test
+- [x] Frontend：寫 ping/pong 測試，確認 cross-window event 通
+- [x] Single-instance plugin 註冊（第二次啟動 focus dashboard）
+- [x] Capabilities：拆 `hud.json` 與 `dashboard.json` 兩個 file
+- [x] `useTauriEvents.ts` composable 設好（centralized event constants）
 
 ### Acceptance criteria
 

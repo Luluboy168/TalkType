@@ -1,0 +1,46 @@
+{
+  "app": {
+    "name": "TalkType",
+    "version_label": "Version"
+  },
+  "hud": {
+    "title": "TalkType HUD",
+    "pongCount": "pong: {count}"
+  },
+  "sidebar": {
+    "dashboard": "Dashboard",
+    "history": "History",
+    "dictionary": "Dictionary",
+    "settings": "Settings",
+    "guide": "Guide"
+  },
+  "dashboard": {
+    "ipcSmoke": {
+      "title": "IPC smoke test",
+      "sendPing": "Send ping",
+      "waiting": "Waiting for pong…"
+    }
+  },
+  "views": {
+    "dashboard": {
+      "heading": "Dashboard",
+      "description": "View recent transcription activity and usage stats."
+    },
+    "history": {
+      "heading": "History",
+      "description": "Browse, search, and delete past voice transcriptions."
+    },
+    "dictionary": {
+      "heading": "Dictionary",
+      "description": "Manage custom vocabulary to improve transcription accuracy."
+    },
+    "settings": {
+      "heading": "Settings",
+      "description": "Adjust hotkeys, transcription provider, API keys, and more."
+    },
+    "guide": {
+      "heading": "Guide",
+      "description": "Learn TalkType's core features and how to use them."
+    }
+  }
+}
