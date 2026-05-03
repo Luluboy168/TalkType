@@ -96,7 +96,38 @@ export type SettingsUpdatedPayload = unknown;
 export type HistoryAddedPayload = unknown;
 export type VocabularyChangedPayload = unknown;
 
+// ─── M3 chunk 2: transcription dispatcher (Groq cloud) ────────────────────
+
+/**
+ * Result of `invoke<TranscriptionResult>('transcribe_audio', ...)` AND payload
+ * of the `transcription:completed` event broadcast on success.
+ *
+ * Mirrors the Rust struct `TranscriptionResult` in
+ * `src-tauri/src/plugins/transcription/mod.rs` (`#[serde(rename_all =
+ * "camelCase")]`). Keep the two in sync per architecture invariant #8.
+ */
+export interface TranscriptionResult {
+  /** Raw text returned by Groq's Whisper response. Trimmed by the Rust side. */
+  rawText: string;
+  /** Wall-clock duration of the Groq round trip in ms (excludes pre-validation). */
+  transcriptionDurationMs: number;
+  /**
+   * Minimum `no_speech_prob` across `verbose_json` segments — lower means
+   * higher speech confidence. `null` when the response had no segments
+   * (rare; near-empty audio).
+   */
+  noSpeechProbability: number | null;
+}
+
 // ─── Frontend-only events (HUD ↔ Dashboard) ────────────────────────────────
 
 export type VoiceFlowStateChangedPayload = unknown;
-export type TranscriptionCompletedPayload = unknown;
+
+/**
+ * Payload of `transcription:completed` event broadcast to both windows.
+ *
+ * Identical shape to `TranscriptionResult` — exposed as a separate alias so
+ * the call site in HUD (paste handler) can express the dependency on the
+ * event-payload contract distinct from the command-result contract.
+ */
+export type TranscriptionCompletedPayload = TranscriptionResult;

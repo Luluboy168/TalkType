@@ -5,7 +5,11 @@
 //   - M2 (audio recorder pipeline) — done; 11 audio_recorder commands wired below
 //   - M3 chunk 1 (credentials) — wires `CredentialsState` + 3 commands
 //     (set / delete / has). `get_credential` stays Rust-only and is consumed
-//     by `transcription_cloud` (chunk 2) + `llm_polish` (M6).
+//     by `transcription` (chunk 2) + `llm_polish` (M6).
+//   - M3 chunk 2 (transcription dispatcher + Groq cloud) — wires
+//     `TranscriptionState` + `transcribe_audio` command. The dispatcher reads
+//     keyring directly via `credentials::get_credential` and emits
+//     `transcription:completed` for both windows on success.
 //
 // Window layout: HUD (`main`, transparent overlay) + Dashboard (`main-window`).
 // Tray icon with "Open Dashboard" + "Quit" menu items, left-click focuses
@@ -29,7 +33,7 @@ use tauri::{
     AppHandle, Emitter, Manager, WindowEvent,
 };
 
-use plugins::{audio_recorder, credentials};
+use plugins::{audio_recorder, credentials, transcription};
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -151,6 +155,10 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             build_tray_icon(&handle)?;
+            // `TranscriptionState::new()` is fallible (reqwest client builder
+            // can fail on TLS init). Doing it here lets the error propagate
+            // through the `setup` Result chain.
+            app.manage(transcription::TranscriptionState::new()?);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -186,6 +194,10 @@ pub fn run() {
             credentials::set_credential,
             credentials::delete_credential,
             credentials::has_credential,
+            // M3 chunk-2: transcription. `transcribe_audio` is the single
+            // frontend entry point; M7 will keep the same command and route
+            // internally to local whisper.cpp when settings select it.
+            transcription::transcribe_audio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

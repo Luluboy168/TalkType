@@ -27,11 +27,12 @@ cpal = "0.15"
 hound = "3.5"
 uuid = { version = "1", features = ["v4"] }
 rustfft = "6"
-# `rt` feature is needed for `tokio::task::spawn_blocking`. Tauri pulls tokio
-# in transitively but only with default features (none of `rt`/`rt-multi-thread`),
+# `rt` for `tokio::task::spawn_blocking` (audio_recorder/commands.rs encode_wav).
+# `time` for `tokio::time::sleep` (transcription/cloud.rs retry honoring
+# Retry-After). Tauri pulls tokio transitively but only with its own features,
 # so we promote it to a direct dep here. Tauri's command runtime is itself
 # tokio-based so this stays ABI-compatible.
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["multipart", "json", "rustls-tls"] }
 
 # `keyring` v3 is the cross-platform OS credential vault. We pin per-target
