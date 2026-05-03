@@ -2,8 +2,10 @@
 //
 // Phase 1 progress:
 //   - M1 (basic IPC + dual window) — done
-//   - M2 (audio recorder pipeline) — chunk 1 wires the audio_recorder plugin
-//     state + commands here; the FFT waveform / preview path land in chunk 2.
+//   - M2 (audio recorder pipeline) — done; 11 audio_recorder commands wired below
+//   - M3 chunk 1 (credentials) — wires `CredentialsState` + 3 commands
+//     (set / delete / has). `get_credential` stays Rust-only and is consumed
+//     by `transcription_cloud` (chunk 2) + `llm_polish` (M6).
 //
 // Window layout: HUD (`main`, transparent overlay) + Dashboard (`main-window`).
 // Tray icon with "Open Dashboard" + "Quit" menu items, left-click focuses
@@ -27,7 +29,7 @@ use tauri::{
     AppHandle, Emitter, Manager, WindowEvent,
 };
 
-use plugins::audio_recorder;
+use plugins::{audio_recorder, credentials};
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -145,6 +147,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(audio_recorder::AudioRecorderState::new())
         .manage(audio_recorder::AudioPreviewState::new())
+        .manage(credentials::CredentialsState::new())
         .setup(|app| {
             let handle = app.handle().clone();
             build_tray_icon(&handle)?;
@@ -176,6 +179,13 @@ pub fn run() {
             audio_recorder::files::delete_recording,
             audio_recorder::files::delete_all_recordings,
             audio_recorder::files::cleanup_old_recordings,
+            // M3 chunk-1: credentials. NOTE: `get_credential` is intentionally
+            // NOT registered here — it is `pub(crate)` and called from
+            // transcription / llm_polish modules in Rust only. Architecture
+            // invariant #1: API key never crosses the IPC boundary.
+            credentials::set_credential,
+            credentials::delete_credential,
+            credentials::has_credential,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

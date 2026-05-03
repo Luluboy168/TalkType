@@ -32,6 +32,21 @@ rustfft = "6"
 # so we promote it to a direct dep here. Tauri's command runtime is itself
 # tokio-based so this stays ABI-compatible.
 tokio = { version = "1", features = ["rt"] }
+reqwest = { version = "0.12", default-features = false, features = ["multipart", "json", "rustls-tls"] }
+
+# `keyring` v3 is the cross-platform OS credential vault. We pin per-target
+# features so each desktop OS uses its native backend (Windows Credential
+# Manager, macOS Keychain, Linux secret-service) without dragging the others
+# in. Phase 1 is Windows-only — macOS / Linux blocks are pre-wired here so
+# Phase 2 cross-platform polish doesn't need to revisit the dep graph.
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
@@ -41,6 +56,10 @@ tauri-plugin-single-instance = "2"
 # `plugins/audio_recorder/files.rs`. Stays out of the release build via
 # the `dev-dependencies` table.
 tempfile = "3"
+# `wiremock` is reserved for M3 chunk-2 transcription tests (mock Groq
+# `/audio/transcriptions` responses for the 8 error variants and one happy
+# path). Added in chunk-1 to avoid re-running cargo add later.
+wiremock = "0.6"
 
 [profile.release]
 panic = "abort"

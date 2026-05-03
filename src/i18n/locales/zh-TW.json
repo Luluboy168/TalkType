@@ -49,6 +49,38 @@
     "settings": {
       "heading": "設定",
       "description": "調整熱鍵、轉錄供應商、API 金鑰與其他偏好。",
+      "apiKey": {
+        "title": "API 金鑰",
+        "providerLabel": "供應商",
+        "providerInactiveSuffix": "M6+",
+        "providerInactiveHint": "此供應商將在 M6 LLM polish 階段啟用。",
+        "keyLabel": "API key",
+        "keyPlaceholder": {
+          "withPrefix": "以 {prefix} 開頭",
+          "generic": "貼上你的 API key"
+        },
+        "save": "儲存",
+        "delete": "刪除",
+        "saved": "✅ 已儲存到 keyring",
+        "show": "顯示",
+        "hide": "隱藏",
+        "getKey": "取得 API key",
+        "privacyDialog": {
+          "title": "傳送音訊到 {provider}",
+          "body": {
+            "groq": "TalkType 會把你錄製的音訊傳送到 Groq (US) 進行轉錄。Groq 政策資料保留最多 14 天。詳見 https://groq.com/privacy",
+            "generic": "TalkType 會把你錄製的音訊傳送到 {provider} 進行處理。請參閱該供應商的隱私政策以了解資料保留政策。"
+          },
+          "confirm": "我了解、繼續儲存",
+          "cancel": "取消"
+        },
+        "error": {
+          "badPrefix": "看起來不像 {provider} 的 key（應以 {prefix} 開頭）",
+          "empty": "請輸入 API key",
+          "tooLong": "API key 長度異常",
+          "keyring": "Keyring 錯誤：{detail}"
+        }
+      },
       "audioInput": {
         "title": "音訊輸入",
         "deviceLabel": "輸入裝置",

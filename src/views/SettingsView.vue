@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// /settings — Phase 1 simplification: a single "Audio Input" section with the
-// device picker + RMS preview. M8 splits this into seven sub-components per
-// area (hotkey / transcription / LLM / audio / API keys / appearance /
-// advanced) to avoid SayIt's 1907-line monolith.
+// /settings — Phase 1 layout: API key section (M3 chunk-1, extracted into
+// `<SettingsApiKeySection>`) above an "Audio Input" section with device
+// picker + RMS preview (M2). M8 will further split into seven
+// per-area sub-components (hotkey / transcription / LLM / audio / API keys /
+// appearance / advanced) to avoid SayIt's 1907-line monolith.
 //
 // Mic preview wiring:
 //   * `list_audio_input_devices` invoke on mount → drives <Select>.
@@ -18,6 +19,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
+import SettingsApiKeySection from "@/components/SettingsApiKeySection.vue";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -179,6 +181,8 @@ onBeforeUnmount(() => {
         {{ t("views.settings.description") }}
       </p>
     </header>
+
+    <SettingsApiKeySection />
 
     <section
       class="space-y-3 rounded-lg border border-border bg-card p-4 text-card-foreground"

@@ -1,7 +1,7 @@
 # 系統架構
 
-> **狀態**：Draft v1（M1 + M2 IPC contract 已落地、M3 + M6 plan 經 challenger refine）
-> **最後更新**：2026-05-03
+> **狀態**：Draft v1（M1 + M2 + M3 chunk-1 IPC contract 已落地、M3 + M6 plan 經 challenger refine）
+> **最後更新**：2026-05-04
 
 ## 高層架構圖
 
@@ -123,7 +123,7 @@
 | `cancel_hotkey_recording` | hotkey_listener | 取消熱鍵錄製 |
 | `mute_system_audio` / `restore_system_audio` | audio_control | WASAPI mute |
 | `play_start_sound` / `play_stop_sound` / `play_error_sound` | sound_feedback | 音效 |
-| `get_credential` / `set_credential` / `delete_credential` | credentials | API key 存取 Windows Credential Vault |
+| `set_credential` / `delete_credential` / `has_credential` | credentials (M3) | API key 存進 / 刪除 / 檢查存在於 Windows Credential Vault；frontend 拿不到 key 內容（`get_credential` 是 `pub(crate)` 的 Rust-only function、永不暴露給 IPC，invariant #1） |
 | `get_settings` / `update_settings` | (Rust state) | 設定統一在 Rust |
 | `get_history_paged` / `add_history` / `delete_history` | database | SQLite 操作 |
 | `get_vocabulary` / `add_vocabulary` / `update_vocabulary` / `delete_vocabulary` | database | 詞彙操作 |

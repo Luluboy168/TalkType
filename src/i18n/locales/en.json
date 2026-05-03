@@ -49,6 +49,38 @@
     "settings": {
       "heading": "Settings",
       "description": "Adjust hotkeys, transcription provider, API keys, and more.",
+      "apiKey": {
+        "title": "API Key",
+        "providerLabel": "Provider",
+        "providerInactiveSuffix": "M6+",
+        "providerInactiveHint": "This provider will be enabled in M6 LLM polish.",
+        "keyLabel": "API Key",
+        "keyPlaceholder": {
+          "withPrefix": "Starts with {prefix}",
+          "generic": "Paste your API key"
+        },
+        "save": "Save",
+        "delete": "Delete",
+        "saved": "✅ Saved to keyring",
+        "show": "Show",
+        "hide": "Hide",
+        "getKey": "Get an API key",
+        "privacyDialog": {
+          "title": "Send audio to {provider}",
+          "body": {
+            "groq": "TalkType will send your recorded audio to Groq (US) for transcription. Groq's policy retains data for up to 14 days. See https://groq.com/privacy",
+            "generic": "TalkType will send your recorded audio to {provider} for processing. See the provider's privacy policy for data retention details."
+          },
+          "confirm": "I understand, save",
+          "cancel": "Cancel"
+        },
+        "error": {
+          "badPrefix": "Doesn't look like a {provider} key (expected {prefix}…)",
+          "empty": "Please enter an API key",
+          "tooLong": "API key looks too long",
+          "keyring": "Keyring error: {detail}"
+        }
+      },
       "audioInput": {
         "title": "Audio Input",
         "deviceLabel": "Input Device",

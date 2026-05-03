@@ -249,6 +249,26 @@ Phase 1 設好以下 hooks（學 SayIt）：
 - Reviewer 看「程式碼正不正確」、Challenger 看「計畫對不對 / 整體有沒有 latent 問題」— 兩者覆蓋不同盲區，不重複工
 - Plan-time challenger 在 implementer 開工前介入，避免錯誤計畫被忠實實作出來；Retro challenger 在 milestone 完成後總結，把 chunk-level reviewer 抓不到的整體性問題沉澱成下個 milestone 可參考的 IDEAS
 
+## 常見踩雷（Known recurring pitfalls）
+
+### shadcn-vue CLI 會把 Google Fonts `@import` 加回 `src/assets/index.css`
+
+每次跑 `pnpm dlx shadcn-vue@latest add <component>` 或 `corepack pnpm exec shadcn-vue add <component>` 加新 UI 元件時，**CLI 會在 `src/assets/index.css` 第 1-7 行重新插入**：
+
+```css
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap');
+
+/*
+   ---break---
+   */
+```
+
+這違反 M0 follow-up「Geist Google Fonts → `@fontsource-variable/geist`（offline + CSP friendly）」。在 M2 chunk 3 與 M3 chunk 1 都已踩雷。
+
+**規範**：implementer 跑完 `shadcn-vue add ...` **必須** revert 這 7 行（保留 `@import "tailwindcss"` 開始的部分）。Reviewer 必須 grep `fonts.googleapis.com` 在 `src/assets/index.css` 確認沒有 regression。
+
+未來考慮：寫個 post-add `cleanup-shadcn.sh` script 或 git pre-commit hook 自動 strip。
+
 ## 工作流程提醒
 
 對 Claude Code working in this repo：
