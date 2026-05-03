@@ -1,7 +1,7 @@
 # 實作 Roadmap
 
 > **狀態**：Draft v1（M0–M2 done、M3 + M6 plan 經 challenger pass + Q1–Q5 review refined）
-> **最後更新**：2026-05-03
+> **最後更新**：2026-05-04
 
 依 milestone 順序拆解 Phase 1 全部任務。每個 milestone 給：deliverable、tasks、acceptance criteria、預估時間、依賴。
 
@@ -12,7 +12,7 @@
 | M0：Repo bootstrap | ✅ Done | 2026-05-02 | 2026-05-02 |
 | M1：基礎 IPC + 雙視窗 | ✅ Done | 2026-05-02 | 2026-05-02 |
 | M2：錄音 pipeline (Rust) | ✅ Done | 2026-05-03 | 2026-05-03 |
-| M3：Cloud transcription | 📋 Planned | TBD | TBD |
+| M3：Cloud transcription | 🚧 In progress | 2026-05-04 | TBD |
 | M4：全域熱鍵 + paste | 📋 Planned | TBD | TBD |
 | M5：HUD overlay | 📋 Planned | TBD | TBD |
 | M6：LLM polish 多 provider | 📋 Planned | TBD | TBD |
