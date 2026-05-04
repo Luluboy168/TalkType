@@ -34,6 +34,15 @@ rustfft = "6"
 # tokio-based so this stays ABI-compatible.
 tokio = { version = "1", features = ["rt", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["multipart", "json", "rustls-tls"] }
+# `arboard` is the cross-platform clipboard backend used by `clipboard_paste` (M4).
+# On Windows it talks to OleSetClipboard which requires STA → all `arboard`
+# calls must be wrapped in `tokio::task::spawn_blocking` + `CoInitializeEx
+# (COINIT_APARTMENTTHREADED)` (M4 chunk 2).
+arboard = "3"
+# `tauri-plugin-store` persists the JSON `settings.json` consumed by `settings.rs`
+# (M4 chunk 3 unifies hotkey config behind it). Cross-platform; lives in a
+# `Store<R>` owned by the Rust side — frontend never reads/writes the file.
+tauri-plugin-store = "2"
 
 # `keyring` v3 is the cross-platform OS credential vault. We pin per-target
 # features so each desktop OS uses its native backend (Windows Credential
@@ -42,6 +51,37 @@ reqwest = { version = "0.12", default-features = false, features = ["multipart",
 # Phase 2 cross-platform polish doesn't need to revisit the dep graph.
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
+# `windows` 0.61 is the Win32 binding used by `hotkey_listener` (M4 chunk 1)
+# and `clipboard_paste` (M4 chunk 2). Feature flags are scoped to exactly what
+# the M4 pipeline needs — adding more features later is cheap, but we want the
+# initial chunk-0 surface auditable.
+#   * Win32_Foundation              — HWND / BOOL / LPARAM / WPARAM / LRESULT
+#   * Win32_UI_WindowsAndMessaging  — SetWindowsHookExW / KBDLLHOOKSTRUCT / MSG
+#                                     / GetMessageW / GetForegroundWindow /
+#                                     SetForegroundWindow / AttachThreadInput /
+#                                     GetWindowThreadProcessId
+#   * Win32_UI_Input_KeyboardAndMouse — GetKeyState / GetAsyncKeyState /
+#                                       SendInput / INPUT / KEYBDINPUT /
+#                                       KEYEVENTF_* / VK_LMENU / VK_RMENU /
+#                                       VK_CONTROL / VK_V etc.
+#   * Win32_UI_Input_Ime            — ImmGetContext / ImmReleaseContext /
+#                                     ImmNotifyIME / IMC_COMPLETECOMPOSITION /
+#                                     NI_COMPSTR (chunk 2 IME composition
+#                                     complete pre-paste)
+#   * Win32_System_Com              — CoInitializeEx / CoUninitialize /
+#                                     COINIT_APARTMENTTHREADED (chunk 2 STA
+#                                     for arboard)
+#   * Win32_System_LibraryLoader    — GetModuleHandleW (SetWindowsHookExW hMod)
+#   * Win32_System_Threading        — GetCurrentThreadId
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input_Ime",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native"] }

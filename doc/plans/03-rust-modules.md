@@ -1,7 +1,7 @@
 # Rust 模組規劃
 
-> **狀態**：Draft v1
-> **最後更新**：2026-05-02
+> **狀態**：Draft v1（M4 chunk 0 — challenger findings 落實 in `hotkey_listener` + `clipboard_paste` 段）
+> **最後更新**：2026-05-05
 
 每個 Rust module 的責任、interface、與相對於 SayIt 的差異。
 
@@ -320,6 +320,25 @@ clipboard_paste/
 - 移除 SayIt 的 `🔴🔴🔴 paste_text CALLED (#{})` debug log（沒必要）
 - AttachThreadInput 流程：用 RAII guard 確保 detach（不靠 manual call）
 
+### M4 challenger findings 落實
+
+下面這些是 M4 plan-time challenger 過了一輪、必須在 chunk 2 實作時落實的設計合約。Reviewer 在 chunk 2 完工時要按表逐項 check。
+
+- **`arboard` 在 STA + `spawn_blocking`**：arboard 3.x Windows backend 用 `OleSetClipboard`、要求 STA。Tauri command runtime 是 tokio multi-thread → 必須用 `tokio::task::spawn_blocking` 包起來，內部 `CoInitializeEx(COINIT_APARTMENTTHREADED)` + RAII `ComGuard`（`CoUninitialize` on `Drop`），不可在 multi-thread tokio worker 直接呼叫 arboard。
+- **Modifier residue 解法（pre-paste step）**：`GetAsyncKeyState` 探測 `VK_LMENU` / `VK_RMENU` / `VK_LCONTROL` / `VK_RCONTROL` / `VK_LSHIFT` / `VK_RSHIFT`，仍 down 的個別送 `KEYEVENTF_KEYUP` 先鬆開，再 `SendInput` Ctrl+V。防 SayIt v0.6.0 LINE-bug 等價的 Windows 情境（Hold mode user 還沒鬆手 paste 已觸發 → target 收到 Alt+Ctrl+V 變成快捷鍵）。
+- **IME composition complete（pre-paste step）**：`ImmGetContext(target_hwnd)` + `ImmNotifyIME(IMC_COMPLETECOMPOSITION, NI_COMPSTR, 0)` + `ImmReleaseContext`。防中文 IME 開啟時 paste 把 composition string 一起塞進去。
+- **`SetForegroundWindow` 回值檢查**：Windows 11 anti-flash policy 會拒絕 background 程序的 `SetForegroundWindow`（FALSE return + `ERROR_ACCESS_DENIED` 之類）。失敗時用 `GetLastError()` 抓 code、emit `paste:focus-restore-failed { hwnd, last_error_code, message }`、return `ClipboardError::FocusRestoreFailed`。剪貼簿仍有文字、UI 顯示 friendly fallback「請手動 Ctrl+V」。
+- **`AttachThreadInput` RAII guard**：detach 必須在 panic path 也跑、用 `scopeguard::defer!` 或自寫 `Drop` impl 包住、不可靠手動 call。
+- **HUD `WS_EX_NOACTIVATE`（chunk 2 owns 此 hook 點）**：Tauri config 不直接暴露 `WS_EX_NOACTIVATE`、chunk 2 在 `setup` hook 內以 `windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(GWL_EXSTYLE, ...)` 補上、避免 paste target 的 `SetForegroundWindow` 把 HUD 算進「最近 active」搶 focus。
+- **7-step paste pipeline**（明列；reviewer checklist）：
+  1. clipboard set via `spawn_blocking` + STA
+  2. sleep 50ms（讓 OS 把剪貼簿 commit）
+  3. `AttachThreadInput` + `SetForegroundWindow`（檢查回值）+ RAII detach
+  4. sleep 50ms（讓 target window 真正 foreground）
+  5. modifier release（探測 + `KEYEVENTF_KEYUP`）
+  6. IME composition complete（`ImmNotifyIME`）
+  7. `SendInput` Ctrl+V（4 個 INPUT records: Ctrl↓ V↓ V↑ Ctrl↑）
+
 ## hotkey_listener.rs
 
 ```
@@ -335,6 +354,26 @@ hotkey_listener/
 - SayIt 1566 行一個 file → TalkType 預算 < 1000 lines total across files
 - Phase 1 不做 Combo trigger（保留 enum 但 UI 不曝露）
 - Phase 1 不做 Custom keycode recording（preset only）— 簡化
+
+### M4 challenger findings 落實
+
+下面這些是 M4 plan-time challenger 過了一輪、必須在 chunk 1 實作時落實的設計合約。Reviewer 在 chunk 1 完工時要按表逐項 check。
+
+- **State 拆 hot/cold path**：`HotkeySharedState` 內 hot path 全 atomic：
+  - `trigger_key: AtomicU8`（enum discriminant）
+  - `trigger_mode: AtomicU8`
+  - `is_pressed: AtomicBool`
+  - `is_toggled_on: AtomicBool`
+  - `double_tap_last_release_ms: AtomicU64`
+  
+  避免 `hook_proc` 拿鎖 — `WH_KEYBOARD_LL` 回呼若 > LowLevelHooksTimeout（預設 ~300ms）OS 會 silent-drop hook 並全系統鍵盤凍結幾秒。只有 cold path（Phase 2 custom recording mode）才 `Mutex<Option<RecordingMode>>`。
+- **AltGr 抑制**：歐洲鍵盤 AltGr = `LControl + RMENU` 同時 down 為輸入字元（@、€、#）。`hook_proc` 看到 RightAlt down 時若 `is_vk_pressed(VK_LCONTROL)` 為 true → suppress 熱鍵 dispatch、讓 `ChrW` 字元正常輸入。否則歐洲使用者打 `@` 都會觸發錄音。
+- **`RunEvent::Exit` 整合**：必須 `UnhookWindowsHookEx` + 通知 thread `PostThreadMessageW(WM_QUIT)` + thread join，不可 leak hook handle 或 OS thread。lib.rs 8-step shutdown 第 4 步「Cancel hotkey listener」要把這幾步串好。
+- **Pure-logic state machine in `shared.rs`**：fake event source、不碰 WinAPI、單元測必跑 4 個 case：
+  - (a) 連按 5 次 in 1s sequence（事件不丟）
+  - (b) double-tap 350ms boundary（349ms / 350ms / 351ms 三個 edge case 結果穩定）
+  - (c) AltGr suppression（RightAlt down + LControl down → 不 dispatch）
+  - (d) Toggle XOR（連續按 4 次 → on/off/on/off）
 
 ## transcription_cloud.rs（Phase 1 只 Groq）
 
