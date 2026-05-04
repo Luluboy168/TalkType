@@ -96,6 +96,8 @@
 - **TranscriptionError → vue 訊息 mapping 是 string-match**：`formatTranscribeError` 用 `raw.startsWith("Audio too small")` 等。如果 Rust `Display` 改字串、UI 訊息會默默 fallback 到 unknown。M9 polish 考慮 Rust 加 `error.code: String` 機器可讀欄位（不影響 user-friendly Display）給 frontend match
 - **「測試轉錄」按鈕 i18n 文字當 status === 'transcribing' 時直接覆寫**（`t("transcribing")` vs `t("transcribe")`）：目前同一 button text 會跳動，改用 statusLabel 顯示更清楚？M9 UX polish
 - **`SettingsApiKeySection.vue` 506 行（軟 budget 500 line）**：M3 chunk 3 加 test connection 後超過 6 行。內容有 cohesion（單一 settings section）但可拆 `useApiKeyTest` composable（test-connection state + formatTestError） + `useApiKeyForm` composable（save/delete + privacy dialog flow），SFC 只剩 wiring + template。M8 Settings 拆 sub-components 時順手做（roadmap 已規劃）
+- **`::-ms-reveal` CSS 從 scoped 搬 global**：M3 polish 把雙 password reveal icon 修在 `SettingsApiKeySection.vue` 的 `<style scoped>`。等 M9 polish 順手把 rule 搬進 `src/assets/index.css` `@layer base`、未來任何新 password input 自動受惠。**搬時刪掉 SettingsApiKeySection.vue 的 scoped 那塊**避免重複。
+- **Real-Groq smoke test under `--features` flag**：本次 session user 提案把 key 放 `.env.local` 給 automated tests 用。當下決定不做（wiremock 31 cases 已涵蓋、real-Groq 是 manual job），但**未來如果想加「Groq API contract 沒改」regression test**：用 `cargo test --features real-groq-smoke` gate、key 從 `GROQ_API_KEY` env var 讀、CI **不**跑、本地 dogfood 才跑。M9 polish candidate（評估 ROI）。
 
 ## Phase 2 / 後期想法
 

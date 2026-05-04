@@ -6,9 +6,21 @@
 ## 現在在哪
 
 - **Phase**：Phase 1 — OSS MVP
-- **進度**：M0 ✅ Done（2026-05-02）／ M1 ✅ Done（2026-05-02、PR #3 merged）／ M2 ✅ Done（2026-05-03、PR #4 merged）／ M3 ✅ Done（2026-05-04、plan refinements PR #5 merged、impl PR pending）／ M4 📋 Planned next
+- **進度**：M0 ✅ Done（2026-05-02）／ M1 ✅ Done（2026-05-02、PR #3 merged）／ M2 ✅ Done（2026-05-03、PR #4 merged）／ M3 ✅ Done（2026-05-04、plan refinements PR #5 + impl PR #6 merged）／ M4 📋 Planned next
 - **正式 milestone 表**：[doc/plans/02-implementation-roadmap.md](../doc/plans/02-implementation-roadmap.md#進度-dashboard)
-- **GitHub**：[Luluboy168/TalkType](https://github.com/Luluboy168/TalkType)、main 已含 M0 + M1 + M2 + M3 plan refinements（PR #1 + #3 + #4 + #5 merged；M3 impl PR pending）
+- **GitHub**：[Luluboy168/TalkType](https://github.com/Luluboy168/TalkType)、main 已含 M0 + M1 + M2 + M3 完整實作（PR #1 + #3 + #4 + #5 + #6 merged）
+
+## 下個 session 接手 SOP（M4 開工前必做）
+
+1. **Branch 切換**：當前 worktree 在 stale 的 `claude/m3-cloud-transcription` 分支（已 merged）。新 session 開始時：
+   ```bash
+   git fetch origin
+   git checkout -b claude/m4-hotkey-paste origin/main
+   ```
+   舊 branch 可選刪：`git branch -d claude/m3-cloud-transcription` + `git push origin --delete claude/m3-cloud-transcription`
+2. **User 待辦**：rotate Groq API key（chat history 出現過、視為已洩漏） — 進 [console.groq.com/keys](https://console.groq.com/keys) 刪舊生新、Settings 改用新的
+3. **Plan-time challenger 必跑**（CLAUDE.md item #5）：M4 開工前同 message 平行 dispatch 一個 challenger 讀 roadmap M4 + reference SayIt hotkey_listener 1566-line 教訓，列出 perf / UX / OS-native edge cases 給主 session
+4. **Retro challenger（可選）**：M3 退場前可考慮跑一次、findings 進 IDEAS；但 M3 已有 Q1-Q5 + plan-time challenger + 4 reviewer subagents 重重把關、retro ROI 較低、可省
 
 ## 最近的 session
 
