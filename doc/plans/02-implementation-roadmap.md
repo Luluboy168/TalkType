@@ -1,6 +1,6 @@
 # 實作 Roadmap
 
-> **狀態**：Draft v1（M0–M3 done、M4 chunk 0 deps + types + IPC contract 已落地、M6 plan 經 challenger refine）
+> **狀態**：Draft v1（M0–M3 done、M4 chunk 0 deps + types + IPC contract 已落地、M4 chunk 3 settings.rs + voice flow store 已落地、M6 plan 經 challenger refine）
 > **最後更新**：2026-05-05
 
 依 milestone 順序拆解 Phase 1 全部任務。每個 milestone 給：deliverable、tasks、acceptance criteria、預估時間、依賴。

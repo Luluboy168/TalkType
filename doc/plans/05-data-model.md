@@ -1,7 +1,7 @@
 # 資料模型
 
-> **狀態**：Draft v1
-> **最後更新**：2026-05-02
+> **狀態**：Draft v1（M4 chunk 3 — Settings v1 schema 落地：Rust-owned `Settings { schema_version: 1, hotkey: HotkeyConfig }`、`tauri-plugin-store` 持久化）
+> **最後更新**：2026-05-05
 
 SQLite schema、settings JSON 格式、與 OS Credential Vault 儲存策略。
 
@@ -154,55 +154,89 @@ CREATE INDEX idx_api_usage_provider   ON api_usage (provider, api_type);
 
 `%APPDATA%\com.luluboy168.talktype\settings.json`
 
-### Schema (Phase 1)
+### M4 chunk 3 v1 schema（已落地）
+
+M4 chunk 3 ship 的最小 schema — 只有 `hotkey` + 一個 `schemaVersion` slot。後續 milestone（M5–M8）會 in-place 擴充：每加一個欄位只是 `Settings` struct + `SettingsPatch` 多一個 `Option<...>` field、`apply_patch` 多一個 merge arm，**不需要 migration**（unknown fields 由 `tauri-plugin-store` 自動保留）。
+
+```rust
+// src-tauri/src/settings.rs
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,         // Phase 1 v1 = 1
+    #[serde(default)]
+    pub hotkey: HotkeyConfig,        // RightAlt + Hold default
+}
+```
+
+對應的 store 內容（user-readable JSON）：
+
+```json
+{
+  "settings": {
+    "schemaVersion": 1,
+    "hotkey": {
+      "triggerKey": "right-alt",
+      "triggerMode": "hold"
+    }
+  }
+}
+```
+
+### Phase 1 完整目標 schema（M5–M8 補完）
+
+下面是 Phase 1 Definition of Done 時 Settings 的完整形狀；M4 chunk 3 只 ship `hotkey`，其餘 milestone 把對應欄位塞進來。`schemaVersion` 維持 1（純加欄位、舊 settings.json 仍可 deserialize、no migration needed）。
 
 ```typescript
 interface Settings {
-  // ===== 熱鍵 =====
+  // ===== Schema metadata（M4 chunk 3 已 ship）=====
+  schemaVersion: number;              // 1
+  
+  // ===== 熱鍵（M4 chunk 3 已 ship）=====
   hotkey: {
-    triggerKey: TriggerKey;     // 預設 RightAlt
-    triggerMode: TriggerMode;   // 預設 Hold
+    triggerKey: TriggerKey;           // 預設 'right-alt'
+    triggerMode: TriggerMode;         // 預設 'hold'
   };
   
-  // ===== 轉錄 =====
-  whisperProvider: 'groq' | 'local';   // 預設 'groq'
-  whisperModelId: string;              // cloud 預設 'whisper-large-v3-turbo'、local 預設 'ggml-base-q5_1'
-  languageTranscription: string | null; // BCP 47 或 null = auto
+  // ===== 轉錄（M5/M7 補完）=====
+  whisperProvider?: 'groq' | 'local';   // M7 加入；預設 'groq'
+  whisperModelId?: string;              // M7 加入
+  languageTranscription?: string | null; // M7/M8
   
-  // ===== LLM Polish =====
-  llmPolishEnabled: boolean;           // 預設 true (用戶選擇)
-  llmProvider: LlmProviderId;          // 'groq' | 'openai' | 'anthropic' | 'gemini'，預設 'groq'
-  llmModelId: string;                  // 跟 provider 走
-  llmPromptMode: 'minimal' | 'active' | 'custom';   // 預設 'active'
-  llmCustomPrompt: string | null;
+  // ===== LLM Polish（M6 補完）=====
+  llmPolishEnabled?: boolean;
+  llmProvider?: LlmProviderId;
+  llmModelId?: string;
+  llmPromptMode?: 'default' | 'email' | 'chat' | 'code' | 'custom';
+  llmCustomPrompt?: string | null;
   
-  // ===== UI / 語言 =====
-  languageUi: string;                  // BCP 47，預設 navigator.language match
+  // ===== UI / 語言（M8）=====
+  languageUi?: string;
   
-  // ===== 音頻 =====
-  audioInputDeviceName: string | null; // null = system default
-  muteOnRecording: boolean;            // 預設 false
-  soundEffectsEnabled: boolean;        // 預設 true
+  // ===== 音頻（M5/M8）=====
+  audioInputDeviceName?: string | null;
+  muteOnRecording?: boolean;
+  soundEffectsEnabled?: boolean;
   
-  // ===== 自動清理 =====
-  autoCleanupRecordingsEnabled: boolean;  // 預設 false
-  autoCleanupDays: number;             // 預設 30
+  // ===== 自動清理（M8）=====
+  autoCleanupRecordingsEnabled?: boolean;
+  autoCleanupDays?: number;
   
-  // ===== 自啟動 =====
-  autoStartAtLogin: boolean;           // 預設 false
-  
-  // ===== Schema metadata =====
-  _settingsSchemaVersion: number;      // 1
+  // ===== 自啟動（M9）=====
+  autoStartAtLogin?: boolean;
 }
 
-type TriggerKey = 
-  | { type: 'preset'; key: 'RightAlt' | 'LeftAlt' | 'RightControl' | 'LeftControl' | 'RightShift' | 'LeftShift' }
-  | { type: 'custom'; keycode: number; displayName: string }
-  | { type: 'combo'; modifiers: ModifierFlag[]; keycode: number; displayName: string };
+// Phase 1 ships preset-only — Custom / Combo deferred to Phase 2.
+type TriggerKey =
+  | 'right-alt' | 'left-alt'
+  | 'right-control' | 'left-control'
+  | 'right-shift' | 'left-shift';
 
-type TriggerMode = 'Hold' | 'Toggle';
-type ModifierFlag = 'Command' | 'Control' | 'Option' | 'Shift';
+type TriggerMode = 'hold' | 'toggle';
 ```
+
+`SettingsPatch`（`update_settings` command 的 input）每個欄位 `Option<>`，sparse 更新；missing 欄位不動。
 
 ### Phase 2 加的 settings
 

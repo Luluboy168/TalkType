@@ -1,6 +1,6 @@
 # 系統架構
 
-> **狀態**：Draft v1（M1 + M2 + M3 IPC contract 已落地、M4 chunk 0 deps + types + IPC contract 已落地、M6 plan 經 challenger refine）
+> **狀態**：Draft v1（M1 + M2 + M3 IPC contract 已落地、M4 chunk 0 deps + types + IPC contract 已落地、M4 chunk 3 settings.rs + voice flow store 已落地、M6 plan 經 challenger refine）
 > **最後更新**：2026-05-05
 
 ## 高層架構圖
@@ -125,7 +125,7 @@
 | `play_start_sound` / `play_stop_sound` / `play_error_sound` | sound_feedback | 音效 |
 | `set_credential` / `delete_credential` / `has_credential` | credentials (M3) | API key 存進 / 刪除 / 檢查存在於 Windows Credential Vault；frontend 拿不到 key 內容（`get_credential` 是 `pub(crate)` 的 Rust-only function、永不暴露給 IPC，invariant #1） |
 | `get_credential_preview` | credentials (M3) | 回傳 masked preview（`"gsk_aBc…XyZ1"`，前 7 + 後 4 char 中間 `…`）讓 user 識別目前儲存的是哪把 key；masking 在 Rust 內完成、full key 不過 IPC、invariant #1 維持 |
-| `get_settings` / `update_settings` | (Rust state) | 設定統一在 Rust |
+| `get_settings` / `update_settings` | settings (M4 chunk 3) | Rust-owned `SettingsState`；`update_settings` 接 `SettingsPatch`（sparse，每欄位 `Option<...>`）、寫 `tauri-plugin-store` JSON、hot-swap `HotkeyListenerState`、broadcast `settings:updated` 給雙視窗 |
 | `get_history_paged` / `add_history` / `delete_history` | database | SQLite 操作 |
 | `get_vocabulary` / `add_vocabulary` / `update_vocabulary` / `delete_vocabulary` | database | 詞彙操作 |
 | `download_whisper_model` | transcription_local | 下載本地 whisper.cpp 模型 |
@@ -154,7 +154,7 @@
 | `transcription:progress` | transcription/local (M7) | `{ percent: f32 }` (whisper.cpp) |
 | `model:download-progress` | transcription/local (M7) | `{ modelId, downloaded, total }` |
 | `polish:failed-fallback` | llm_polish (M6) | `PolishFallbackPayload { reason, providerId }` — polish 失敗時、fallback to raw 並通知 HUD 顯示 warning icon |
-| `settings:updated` | (lib.rs Rust state) | `Settings` snapshot |
+| `settings:updated` | settings (M4 chunk 3) | `Settings` snapshot — 由 `SettingsState::update` 在每次 `update_settings` 後 broadcast；雙視窗 `useSettingsStore`（M8）listen 後 invalidate cache |
 | `history:added` | database | `TranscriptionRecord` |
 | `vocabulary:changed` | database | `()` (frontend re-fetch) |
 

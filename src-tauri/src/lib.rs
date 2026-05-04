@@ -25,6 +25,13 @@
 //     The setup hook applies `WS_EX_NOACTIVATE` to the HUD post-creation
 //     so paste's `SetForegroundWindow` doesn't accidentally hand focus
 //     back to the HUD instead of the user's target app.
+//   - M4 chunk 3 (settings.rs + voice flow store) — registers
+//     `tauri-plugin-store`, loads `SettingsState` from
+//     `app_data_dir/settings.json` in setup (or persists defaults on first
+//     run), wires `get_settings` / `update_settings` commands, and uses
+//     the persisted `HotkeyConfig` to install the keyboard hook so the
+//     user's saved hotkey takes effect at boot rather than the hardcoded
+//     RightAlt+Hold default.
 //
 // Window layout: HUD (`main`, transparent overlay) + Dashboard (`main-window`).
 // Tray icon with "Open Dashboard" + "Quit" menu items, left-click focuses
@@ -32,11 +39,12 @@
 // Dashboard close-request is intercepted -> hide instead of destroy (only tray
 // "Quit" exits).
 //
-// Future modules (settings.rs, additional plugins) will be added in subsequent
-// milestones; this file aims for the ~300-line orchestrator budget per
+// Future modules (additional plugins) will be added in subsequent milestones;
+// this file aims for the ~300-line orchestrator budget per
 // doc/plans/03-rust-modules.md.
 
 pub mod plugins;
+pub mod settings;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -160,6 +168,11 @@ pub fn run() {
 
     let app = builder
         .plugin(tauri_plugin_opener::init())
+        // M4 chunk 3: persistent JSON store for `Settings`. Must register
+        // before any `setup` callback that reads / writes the store —
+        // `SettingsState::load_or_default` calls `app.store(...)` which
+        // requires this plugin's StoreState in the resource table.
+        .plugin(tauri_plugin_store::Builder::default().build())
         .manage(audio_recorder::AudioRecorderState::new())
         .manage(audio_recorder::AudioPreviewState::new())
         .manage(credentials::CredentialsState::new())
@@ -189,12 +202,20 @@ pub fn run() {
                 }
             }
 
-            // M4 chunk 1: install the global keyboard hook with the default
-            // config (RightAlt + Hold). M4 chunk 3's `settings.rs` will read
-            // the persisted `HotkeyConfig` from the JSON store and pass it
-            // here instead of `default()`.
+            // M4 chunk 3: load the persisted `Settings` from
+            // `app_data_dir/settings.json` (or write defaults on first run).
+            // This must happen BEFORE `HotkeyListenerState::install` so the
+            // OS hook starts with the user's saved hotkey rather than
+            // `RightAlt+Hold` and only later swaps via `update_hotkey_config`.
+            app.manage(settings::SettingsState::load_or_default(app.handle())?);
+            let initial_hotkey = app.state::<settings::SettingsState>().snapshot()?.hotkey;
+
+            // M4 chunk 1: install the global keyboard hook with the persisted
+            // config from `SettingsState`. Hot updates afterward go through
+            // `settings::update_settings` which forwards to
+            // `HotkeyListenerState::apply_config` (atomics swap, no reinstall).
             app.state::<hotkey_listener::HotkeyListenerState>()
-                .install(handle, hotkey_listener::HotkeyConfig::default())?;
+                .install(handle, initial_hotkey)?;
 
             Ok(())
         })
@@ -257,6 +278,12 @@ pub fn run() {
             clipboard_paste::capture_target_window,
             clipboard_paste::paste_text,
             clipboard_paste::copy_to_clipboard,
+            // M4 chunk 3: persistent settings. `get_settings` is the once-
+            // on-boot snapshot; `update_settings` is the patch path that
+            // also hot-swaps `HotkeyListenerState` and broadcasts
+            // `settings:updated` to both windows.
+            settings::get_settings,
+            settings::update_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
