@@ -1,35 +1,14 @@
 <script setup lang="ts">
-// Settings → API key section (M3 chunk 1).
-//
-// Allows the user to store / delete API keys per provider in the OS
-// credential vault via three Tauri commands:
-//
-//   * `has_credential(provider)`  — checks existence (no key value returned).
-//   * `set_credential(provider, key)` — stores after validation.
-//   * `delete_credential(provider)` — removes (idempotent).
-//
-// `get_credential` is intentionally absent — Rust-only per architecture
-// invariant #1. The "show / hide key" toggle reveals only what the user
-// typed in THIS session, never a value fetched back from keyring.
-//
-// **Privacy disclosure**: the first time a user saves a key for a given
-// provider (i.e. `hasCredential === false` BEFORE save), a
-// `<ProviderPrivacyDialog>` is shown explaining the audio-data flow. The
-// user must explicitly confirm before the key is committed; cancel drops
-// the input.
-//
-// **Phase 1 / M3** active provider: `groq`. The other three providers
-// (`openai`, `anthropic`, `gemini`) are listed in the dropdown but
-// disabled with `(M6+)` suffix — selecting them shows a placeholder
-// message rather than allowing key entry.
-//
-// Extracted from `SettingsView.vue` to keep both files under the
-// ~200-line component budget; M8 will further split `SettingsView` into
-// per-area sub-components.
+// Settings → API key section (M3 chunks 1 + 3).
+// Uses set_credential / has_credential / delete_credential. `get_credential`
+// is Rust-only (architecture invariant #1) — the show/hide eye reveals only
+// what the user typed THIS session, never a stored value. First-time save
+// gates on <ProviderPrivacyDialog>. M3 active provider: `groq`; others are
+// disabled with `(M6+)` suffix until M6 wires them up.
 
 import { invoke } from "@tauri-apps/api/core";
-import { Eye, EyeOff, ExternalLink, Trash2 } from "lucide-vue-next";
-import { computed, onMounted, ref, watch } from "vue";
+import { Eye, EyeOff, ExternalLink, Loader2, Trash2 } from "lucide-vue-next";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import ProviderPrivacyDialog from "@/components/ProviderPrivacyDialog.vue";
@@ -43,7 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { LLM_PROVIDERS, findProvider } from "@/lib/providers";
-import type { LlmProviderId } from "@/types";
+import type { LlmProviderId, TestConnectionResult } from "@/types";
 
 const { t } = useI18n();
 
@@ -61,6 +40,23 @@ const showPrivacyDialog = ref<boolean>(false);
  * (EyeOff icon). Affects ONLY the user's current-session typed input —
  * stored keys are never displayed. */
 const isKeyVisible = ref<boolean>(false);
+
+// ─── Test connection (M3 chunk 3, Q5) ─────────────────────────────────────
+
+/** True while `invoke('test_provider_connection')` is in flight. */
+const isTesting = ref<boolean>(false);
+/** Human-readable result message after a test call (success or error).
+ * `null` means "no result to show". Cleared automatically 5 s after a
+ * successful test, or whenever the user switches provider / saves /
+ * deletes a key (so the message doesn't stay stale next to a fresh key). */
+const testResultMessage = ref<string | null>(null);
+/** Discriminator for styling — success vs error vs in-progress. */
+const testResultKind = ref<"success" | "error" | null>(null);
+/** Pending auto-clear timer for `testResultMessage`. Held so we can
+ * cancel + re-arm when a new test runs. */
+let testResultClearTimer: ReturnType<typeof setTimeout> | null = null;
+/** How long a successful test result lingers before auto-clearing. */
+const TEST_RESULT_CLEAR_MS = 5_000;
 
 const currentProvider = computed(() => findProvider(selectedProvider.value));
 const isProviderActive = computed(() => currentProvider.value?.active ?? false);
@@ -132,6 +128,8 @@ async function persistKey(): Promise<void> {
   }
   isSaving.value = true;
   errorMessage.value = null;
+  // Saving a fresh key invalidates any previous test result.
+  clearTestResult();
   try {
     await invoke<void>("set_credential", {
       provider: selectedProvider.value,
@@ -182,6 +180,8 @@ async function handleDeleteClick(): Promise<void> {
   if (!isProviderActive.value) return;
   isDeleting.value = true;
   errorMessage.value = null;
+  // Stale test result no longer applies to a deleted key.
+  clearTestResult();
   try {
     await invoke<void>("delete_credential", {
       provider: selectedProvider.value,
@@ -191,6 +191,83 @@ async function handleDeleteClick(): Promise<void> {
     errorMessage.value = formatError(err);
   } finally {
     isDeleting.value = false;
+  }
+}
+
+/** Maps the Rust `TestConnectionError` flat-string into a localized message.
+ *
+ * The Rust `Display` impls (in `transcription/health.rs`) produce well-known
+ * prefixes that we string-match here: `"Invalid API key (HTTP 401)"`,
+ * `"Restricted API key (HTTP 403)"`, `"Rate limited ..."`, `"Network error: ..."`,
+ * `"API key missing ..."`, `"Provider returned error 5xx: ..."`.
+ *
+ * Anything we don't recognise falls through to the generic `unknown` message
+ * with the raw string included for debugging.
+ */
+function formatTestError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (raw.startsWith("Invalid API key")) {
+    return t("views.settings.apiKey.testError.invalidKey");
+  }
+  if (raw.startsWith("Restricted API key")) {
+    return t("views.settings.apiKey.testError.restrictedKey");
+  }
+  if (raw.startsWith("Rate limited")) {
+    // Rust formats `RateLimited(Some(60))` as `"Rate limited (retry after Some(60)s)"`.
+    // Pull the seconds out when present; otherwise show the no-seconds message.
+    const match = raw.match(/Some\((\d+)\)/);
+    if (match) {
+      return t("views.settings.apiKey.testError.rateLimited", {
+        seconds: match[1],
+      });
+    }
+    return t("views.settings.apiKey.testError.rateLimitedNoSeconds");
+  }
+  if (raw.startsWith("Network error")) {
+    return t("views.settings.apiKey.testError.network");
+  }
+  if (raw.startsWith("API key missing")) {
+    return t("views.settings.apiKey.testError.missingKey");
+  }
+  return t("views.settings.apiKey.testError.unknown", { detail: raw });
+}
+
+/** Reset transient test-result UI state. Called on provider switch, save,
+ * delete, before a fresh test, and on the auto-clear timer. */
+function clearTestResult(): void {
+  if (testResultClearTimer) {
+    clearTimeout(testResultClearTimer);
+    testResultClearTimer = null;
+  }
+  testResultMessage.value = null;
+  testResultKind.value = null;
+}
+
+async function handleTestClick(): Promise<void> {
+  if (isTesting.value || isSaving.value || isDeleting.value) return;
+  if (!isProviderActive.value) return;
+  if (!hasCredential.value) return;
+  // Pre-flight: clear any previous result + cancel pending auto-clear so the
+  // old message doesn't disappear mid-test from the prior schedule.
+  clearTestResult();
+  isTesting.value = true;
+  try {
+    const result = await invoke<TestConnectionResult>("test_provider_connection", {
+      provider: selectedProvider.value,
+    });
+    testResultKind.value = "success";
+    testResultMessage.value =
+      result.modelCount !== null
+        ? t("views.settings.apiKey.testSuccess", { count: result.modelCount })
+        : t("views.settings.apiKey.testSuccessNoCount");
+  } catch (err) {
+    testResultKind.value = "error";
+    testResultMessage.value = formatTestError(err);
+  } finally {
+    isTesting.value = false;
+    // Auto-clear after 5 s — long enough to read, short enough not to
+    // collide with the user retrying after a fix.
+    testResultClearTimer = setTimeout(clearTestResult, TEST_RESULT_CLEAR_MS);
   }
 }
 
@@ -204,11 +281,21 @@ watch(selectedProvider, () => {
   apiKeyInput.value = "";
   isKeyVisible.value = false;
   errorMessage.value = null;
+  clearTestResult();
   void refreshHasCredential();
 });
 
 onMounted(() => {
   void refreshHasCredential();
+});
+
+onUnmounted(() => {
+  // Cancel any pending auto-clear so the setTimeout callback doesn't fire
+  // against a torn-down component.
+  if (testResultClearTimer) {
+    clearTimeout(testResultClearTimer);
+    testResultClearTimer = null;
+  }
 });
 </script>
 
@@ -329,17 +416,48 @@ onMounted(() => {
         <span class="text-xs font-medium text-foreground">
           {{ t("views.settings.apiKey.saved") }}
         </span>
-        <Button
-          size="sm"
-          variant="ghost"
-          class="h-7 px-2 text-destructive hover:text-destructive"
-          :disabled="isSaving || isDeleting"
-          @click="handleDeleteClick"
-        >
-          <Trash2 class="size-3.5" />
-          <span class="ml-1">{{ t("views.settings.apiKey.delete") }}</span>
-        </Button>
+        <div class="flex items-center gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            class="h-7 px-2"
+            :disabled="isSaving || isDeleting || isTesting"
+            @click="handleTestClick"
+          >
+            <Loader2
+              v-if="isTesting"
+              class="size-3.5 animate-spin"
+            />
+            <span class="ml-1">{{
+              isTesting
+                ? t("views.settings.apiKey.testing")
+                : t("views.settings.apiKey.test")
+            }}</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            class="h-7 px-2 text-destructive hover:text-destructive"
+            :disabled="isSaving || isDeleting || isTesting"
+            @click="handleDeleteClick"
+          >
+            <Trash2 class="size-3.5" />
+            <span class="ml-1">{{ t("views.settings.apiKey.delete") }}</span>
+          </Button>
+        </div>
       </div>
+
+      <p
+        v-if="testResultMessage"
+        :class="[
+          'text-xs',
+          testResultKind === 'success' ? 'text-primary' : 'text-destructive',
+        ]"
+        role="status"
+        aria-live="polite"
+      >
+        {{ testResultMessage }}
+      </p>
     </div>
 
     <p

@@ -21,15 +21,22 @@
 // now so we can manually verify M2 + future M3 transcription.
 
 import { invoke } from "@tauri-apps/api/core";
-import { computed, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useAudioWaveform } from "@/composables/useAudioWaveform";
-import type { StopRecordingResult } from "@/types";
+import type { StopRecordingResult, TranscriptionResult } from "@/types";
 
-type RecordingStatus = "idle" | "recording" | "stopped" | "saved" | "error";
+type RecordingStatus =
+  | "idle"
+  | "recording"
+  | "stopped"
+  | "transcribing"
+  | "transcribed"
+  | "saved"
+  | "error";
 
 const { t } = useI18n();
 const { smoothedLevels, start: startWaveform, stop: stopWaveform } =
@@ -41,6 +48,16 @@ const stopResult = ref<StopRecordingResult | null>(null);
 const savedPath = ref<string | null>(null);
 const errorMessage = ref<string | null>(null);
 const autoStopEnabled = ref(true);
+
+// ─── Transcription smoke (M3 chunk 3) ─────────────────────────────────────
+
+/** Result of the most recent `transcribe_audio` call. `null` when no
+ * transcription has run yet (or after the user clears it via Start). */
+const transcriptionResult = ref<TranscriptionResult | null>(null);
+/** Whether a Groq API key is currently saved — gates the "Test Transcribe"
+ * button. Refreshed on mount and whenever the recorder transitions back to
+ * `stopped` (so a key set mid-session shows up without a remount). */
+const hasGroqKey = ref<boolean>(false);
 
 let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 let autoStopTimer: ReturnType<typeof setTimeout> | null = null;
@@ -68,6 +85,10 @@ const statusLabel = computed<string>(() => {
       const durSec = (r.durationMs / 1000).toFixed(1);
       return `${t("dashboard.audioTest.stopped")} (${durSec} s, peak=${r.peakEnergyLevel.toFixed(3)}, rms=${r.rmsEnergyLevel.toFixed(3)})`;
     }
+    case "transcribing":
+      return t("dashboard.audioTest.transcribing");
+    case "transcribed":
+      return t("dashboard.audioTest.transcribed");
     case "saved":
       return savedPath.value
         ? `${t("dashboard.audioTest.saved")} → ${savedPath.value}`
@@ -95,6 +116,7 @@ async function handleStart(): Promise<void> {
   errorMessage.value = null;
   stopResult.value = null;
   savedPath.value = null;
+  transcriptionResult.value = null;
   try {
     await invoke<void>("start_recording", { deviceName: null });
     await startWaveform();
@@ -148,6 +170,91 @@ async function handleSave(): Promise<void> {
   }
 }
 
+/** Maps Rust `TranscriptionError` flat-strings to localized messages.
+ * Mirrors the `formatTestError` pattern from `SettingsApiKeySection.vue`,
+ * but for the chunk-2 `TranscriptionError` enum — different prefixes
+ * (e.g. `"Audio too small to transcribe"`, `"A previous transcription is
+ * still in progress"`) so we can't reuse the test-connection mapping. */
+function formatTranscribeError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (raw.startsWith("API key missing")) {
+    return t("dashboard.audioTest.transcribeError.noKey");
+  }
+  if (raw === "A previous transcription is still in progress") {
+    return t("dashboard.audioTest.transcribeError.busy");
+  }
+  if (raw.startsWith("Audio too small")) {
+    return t("dashboard.audioTest.transcribeError.tooSmall");
+  }
+  if (raw.startsWith("Audio exceeds Groq")) {
+    return t("dashboard.audioTest.transcribeError.tooLarge");
+  }
+  if (
+    raw.startsWith("Network appears offline") ||
+    raw.startsWith("DNS lookup failed") ||
+    raw.startsWith("TLS handshake failed") ||
+    raw.startsWith("Request timed out") ||
+    raw.startsWith("Connection refused") ||
+    raw.startsWith("Other network error")
+  ) {
+    return t("dashboard.audioTest.transcribeError.network");
+  }
+  return t("dashboard.audioTest.transcribeError.unknown", { detail: raw });
+}
+
+async function refreshHasGroqKey(): Promise<void> {
+  try {
+    hasGroqKey.value = await invoke<boolean>("has_credential", {
+      provider: "groq",
+    });
+  } catch (err) {
+    // Don't surface — just leave the button disabled if we can't check.
+    console.warn("[audio-test] has_credential check failed:", err);
+    hasGroqKey.value = false;
+  }
+}
+
+async function handleTranscribe(): Promise<void> {
+  if (status.value !== "stopped") return;
+  errorMessage.value = null;
+  transcriptionResult.value = null;
+  status.value = "transcribing";
+  try {
+    // M3 ships only Groq cloud; vocabulary is null for the smoke surface
+    // (M8's Dictionary view will populate it once history persistence
+    // arrives). The Rust dispatcher consumes the WAV buffer on success;
+    // returning the recorder to "stopped" after error keeps the buffer
+    // so the user can retry without re-recording.
+    const result = await invoke<TranscriptionResult>("transcribe_audio", {
+      vocabulary: null,
+    });
+    transcriptionResult.value = result;
+    status.value = "transcribed";
+  } catch (err) {
+    errorMessage.value = formatTranscribeError(err);
+    // Stay in "stopped" so the user can retry; a fresh "Start" still resets
+    // the result + error fields (see handleStart). For Busy / non-recoverable
+    // cases the Rust side has already preserved the buffer state anyway.
+    status.value = "stopped";
+    console.error("[audio-test] transcribe_audio failed:", err);
+  }
+}
+
+onMounted(() => {
+  // Settings can land here with a key already saved or absent; refresh on
+  // every mount so the "Test Transcribe" button reflects the current state.
+  void refreshHasGroqKey();
+});
+
+// Re-check has_credential when the recorder reaches a stoppable transcription
+// point. User may have set the key in Settings between mount and stop, so
+// gating only on the onMount check would miss that flow.
+watch(status, (next) => {
+  if (next === "stopped") {
+    void refreshHasGroqKey();
+  }
+});
+
 onUnmounted(() => {
   clearTimers();
   // Best-effort: if the user navigates away while recording, tell Rust to
@@ -162,7 +269,7 @@ onUnmounted(() => {
   // the WAV bytes are still sitting in `AudioRecorderState::wav_buffer` —
   // ask Rust to drop them so we don't keep ~50 MB pinned across navigation.
   // Best-effort: don't await, don't escalate failures (no cleanup is fine).
-  if (status.value === "stopped") {
+  if (status.value === "stopped" || status.value === "transcribed") {
     void invoke<unknown>("clear_recording_buffer").catch((err) => {
       console.warn("[audio-test] clear_recording_buffer during unmount:", err);
     });
@@ -186,10 +293,10 @@ onUnmounted(() => {
       </label>
     </header>
 
-    <div class="flex items-center gap-2">
+    <div class="flex flex-wrap items-center gap-2">
       <Button
         size="sm"
-        :disabled="status === 'recording'"
+        :disabled="status === 'recording' || status === 'transcribing'"
         @click="handleStart"
       >
         {{ t("dashboard.audioTest.start") }}
@@ -209,6 +316,18 @@ onUnmounted(() => {
         @click="handleSave"
       >
         {{ t("dashboard.audioTest.save") }}
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        :disabled="status !== 'stopped' || !hasGroqKey"
+        @click="handleTranscribe"
+      >
+        {{
+          status === "transcribing"
+            ? t("dashboard.audioTest.transcribing")
+            : t("dashboard.audioTest.transcribe")
+        }}
       </Button>
     </div>
 
@@ -231,5 +350,35 @@ onUnmounted(() => {
     >
       {{ statusLabel }}
     </p>
+
+    <div
+      v-if="transcriptionResult"
+      class="space-y-1 rounded-md bg-muted px-3 py-2"
+    >
+      <p class="text-xs font-medium text-muted-foreground">
+        {{ t("dashboard.audioTest.resultLabel") }}
+      </p>
+      <textarea
+        :value="transcriptionResult.rawText"
+        readonly
+        rows="3"
+        class="w-full resize-none rounded border border-border bg-background p-2 font-mono text-xs text-foreground"
+        :aria-label="t('dashboard.audioTest.resultLabel')"
+      />
+      <p class="text-xs text-muted-foreground">
+        {{
+          t("dashboard.audioTest.resultDuration", {
+            ms: transcriptionResult.transcriptionDurationMs,
+          })
+        }}<span v-if="transcriptionResult.noSpeechProbability !== null">
+          ·
+          {{
+            t("dashboard.audioTest.resultNoSpeechProb", {
+              prob: transcriptionResult.noSpeechProbability.toFixed(3),
+            })
+          }}
+        </span>
+      </p>
+    </div>
   </section>
 </template>

@@ -25,12 +25,26 @@
       "start": "Start",
       "stop": "Stop",
       "save": "Save WAV",
+      "transcribe": "Test Transcribe",
+      "transcribing": "Transcribing...",
+      "transcribed": "Transcribed",
       "autoStop3s": "Auto-stop after 3s",
       "idle": "Idle",
       "recording": "Recording",
       "stopped": "Stopped",
       "saved": "Saved",
-      "error": "Error"
+      "error": "Error",
+      "resultLabel": "Result",
+      "resultDuration": "Duration {ms} ms",
+      "resultNoSpeechProb": "min(no_speech_prob)={prob}",
+      "transcribeError": {
+        "noKey": "Groq API key not set — configure in Settings",
+        "network": "Connection failed",
+        "busy": "Previous transcription still in progress",
+        "tooSmall": "Recording too short",
+        "tooLarge": "Recording exceeds Groq's 25 MB limit",
+        "unknown": "Error: {detail}"
+      }
     }
   },
   "views": {
@@ -65,6 +79,10 @@
         "show": "Show",
         "hide": "Hide",
         "getKey": "Get an API key",
+        "test": "Test connection",
+        "testing": "Testing...",
+        "testSuccess": "✅ Connection OK ({count} models available)",
+        "testSuccessNoCount": "✅ Connection OK",
         "privacyDialog": {
           "title": "Send audio to {provider}",
           "body": {
@@ -79,6 +97,15 @@
           "empty": "Please enter an API key",
           "tooLong": "API key looks too long",
           "keyring": "Keyring error: {detail}"
+        },
+        "testError": {
+          "invalidKey": "❌ Invalid API key (401) — check for typos or trailing whitespace",
+          "restrictedKey": "❌ Key has insufficient permissions (403) — ensure the key has Whisper API access",
+          "rateLimited": "❌ Rate limited (429), retry in {seconds}s",
+          "rateLimitedNoSeconds": "❌ Rate limited (429), retry shortly",
+          "network": "❌ Connection failed — check network or HTTPS_PROXY",
+          "missingKey": "❌ No API key saved yet",
+          "unknown": "❌ Unknown error: {detail}"
         }
       },
       "audioInput": {

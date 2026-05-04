@@ -25,12 +25,26 @@
       "start": "開始錄音",
       "stop": "停止錄音",
       "save": "存成 WAV",
+      "transcribe": "測試轉錄",
+      "transcribing": "轉錄中...",
+      "transcribed": "轉錄完成",
       "autoStop3s": "3 秒後自動停止",
       "idle": "閒置",
       "recording": "錄音中",
       "stopped": "已停止",
       "saved": "已存檔",
-      "error": "錯誤"
+      "error": "錯誤",
+      "resultLabel": "結果",
+      "resultDuration": "耗時 {ms} ms",
+      "resultNoSpeechProb": "min(no_speech_prob)={prob}",
+      "transcribeError": {
+        "noKey": "尚未設定 Groq API key、請去 Settings 設定",
+        "network": "連線失敗",
+        "busy": "上一筆轉錄處理中",
+        "tooSmall": "錄音太短",
+        "tooLarge": "錄音超過 25 MB Groq 上限",
+        "unknown": "錯誤：{detail}"
+      }
     }
   },
   "views": {
@@ -65,6 +79,10 @@
         "show": "顯示",
         "hide": "隱藏",
         "getKey": "取得 API key",
+        "test": "測試連線",
+        "testing": "測試中...",
+        "testSuccess": "✅ 連線成功（{count} 個模型可用）",
+        "testSuccessNoCount": "✅ 連線成功",
         "privacyDialog": {
           "title": "傳送音訊到 {provider}",
           "body": {
@@ -79,6 +97,15 @@
           "empty": "請輸入 API key",
           "tooLong": "API key 長度異常",
           "keyring": "Keyring 錯誤：{detail}"
+        },
+        "testError": {
+          "invalidKey": "❌ API key 無效（401）— 請檢查 key 是否完整、無多餘空白",
+          "restrictedKey": "❌ Key 權限不足（403）— 請確認此 key 有 Whisper API 權限",
+          "rateLimited": "❌ 速率限制中（429），請稍候 {seconds} 秒後再試",
+          "rateLimitedNoSeconds": "❌ 速率限制中（429），請稍候再試",
+          "network": "❌ 連線失敗 — 檢查網路或 HTTPS_PROXY 設定",
+          "missingKey": "❌ 尚未儲存 API key",
+          "unknown": "❌ 未知錯誤：{detail}"
         }
       },
       "audioInput": {

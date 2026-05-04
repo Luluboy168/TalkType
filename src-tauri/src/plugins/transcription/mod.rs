@@ -26,9 +26,11 @@
 
 pub mod cloud;
 pub mod error;
+pub mod health;
 mod parser;
 
 pub use error::TranscriptionError;
+pub use health::test_provider_connection;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

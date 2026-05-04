@@ -10,6 +10,10 @@
 //     `TranscriptionState` + `transcribe_audio` command. The dispatcher reads
 //     keyring directly via `credentials::get_credential` and emits
 //     `transcription:completed` for both windows on success.
+//   - M3 chunk 3 (Q5 connectivity health + UX surfaces) — adds
+//     `test_provider_connection` (Groq `/models` GET) so the Settings page
+//     can verify a freshly-saved key works without burning a transcription
+//     quota slot. Future M6 extends to other 3 providers.
 //
 // Window layout: HUD (`main`, transparent overlay) + Dashboard (`main-window`).
 // Tray icon with "Open Dashboard" + "Quit" menu items, left-click focuses
@@ -198,6 +202,10 @@ pub fn run() {
             // frontend entry point; M7 will keep the same command and route
             // internally to local whisper.cpp when settings select it.
             transcription::transcribe_audio,
+            // M3 chunk-3 (Q5): provider connectivity health check. M3 ships
+            // Groq; M6 will extend the same command to OpenAI / Anthropic
+            // / Gemini by adding match arms in `transcription/health.rs`.
+            transcription::health::test_provider_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

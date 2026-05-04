@@ -48,3 +48,24 @@ export interface ProviderInfo {
    * "Save" button and show an `(M6+)` suffix for the others. */
   active: boolean;
 }
+
+/**
+ * Successful result of `invoke<TestConnectionResult>('test_provider_connection', ...)`.
+ *
+ * Mirrors the Rust struct `TestConnectionResult` in
+ * `src-tauri/src/plugins/transcription/health.rs`
+ * (`#[serde(rename_all = "camelCase")]`). Keep the two in sync per
+ * architecture invariant #8.
+ *
+ * `modelCount` is `null` when the provider's `/models` response shape didn't
+ * include a `data` array (defensive — current Groq API always returns one,
+ * but the test path tolerates future shape changes).
+ */
+export interface TestConnectionResult {
+  /** Always true on success — provider responded with HTTP 200 + parseable body. */
+  ok: boolean;
+  /** Echoed provider id from the request (e.g. `"groq"`). */
+  provider: LlmProviderId;
+  /** Number of models the provider reports as available. `null` when unparseable. */
+  modelCount: number | null;
+}
