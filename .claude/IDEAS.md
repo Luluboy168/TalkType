@@ -120,6 +120,13 @@
 - **`apply_event` 回 `Vec<HotkeyEvent>` 但 Phase 1 永遠 0 或 1 個（micro-opt 候選）**：`hotkey_listener/shared.rs:145`。Phase 2 evaluate 改 `Option<HotkeyEvent>` 或 `SmallVec<[_; 1]>`。Trivial、defer。
 - **`hook_proc` 尾端有一個 wasted atomic load（trivial）**：`hotkey_listener/windows.rs:404` `let _ = state.is_pressed.load(...)` 是 reserved-for-future tracing comment、目前是浪費的 atomic load。下次 touch 該檔時刪掉或實際用。
 
+## M4 chunk 3 reviewer findings（2026-05-05 — 0 P0 / 0 P1、僅 P2）
+
+> 由 M4 chunk 3 完成後的獨立 code reviewer subagent 找出。chunk 3 settings.rs + useVoiceFlowStore + lib.rs wiring 全 pass、CLAUDE.md 全合規、只有 2 個 P2：
+
+- **Async listener registration race in `useVoiceFlowStore.init()`（M5 owns）**：`useVoiceFlowStore.ts:206-241` 用 `void listenToEvent(...).then(unlisten => unlistenFns.push(unlisten))`。`listenToEvent` 是 async 回 Promise、events fired between `init()` 呼叫與 Promise resolve 之間會丟失。Phase 1 HUD bootstrap 比 user reflex 快、不會踩；M5 加 HUD visual states 時 consider 改 `init()` 回 Promise + await all `listen` registrations 才宣告 ready。
+- **`PASTE_FOCUS_RESTORE_FAILED` 已 active state collision（M5 owns）**：`useVoiceFlowStore.ts:230-241` 若此 event 在 `transcribing` 中發 (極少見的 race：paste 失敗剛好撞上下一個 HOTKEY_PRESSED 開新 flow)，會把已 active 的新 flow state 清成 `error`。Phase 1 paste ordering 幾乎不可能踩；M5 HUD 擁有 visual state 時要處理 collision (e.g. only transition if status === 'recording'/'transcribing' for THIS paste cycle)。
+
 ## Phase 2 / 後期想法
 
 - **macOS dev setup**：目前 doc 只 describe 設計，沒實機跑過。Phase 2 啟動時要做 spike。
