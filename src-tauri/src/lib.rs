@@ -198,6 +198,10 @@ pub fn run() {
             credentials::set_credential,
             credentials::delete_credential,
             credentials::has_credential,
+            // Frontend-safe masked preview ("gsk_aBc…XyZ1") so the user can
+            // identify which key is currently stored. Full key never crosses
+            // IPC — masking happens Rust-side.
+            credentials::get_credential_preview,
             // M3 chunk-2: transcription. `transcribe_audio` is the single
             // frontend entry point; M7 will keep the same command and route
             // internally to local whisper.cpp when settings select it.

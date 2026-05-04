@@ -76,6 +76,7 @@
         "save": "Save",
         "delete": "Delete",
         "saved": "✅ Saved to keyring",
+        "previewTooltip": "First 7 + last 4 chars; the rest is never read back",
         "show": "Show",
         "hide": "Hide",
         "getKey": "Get an API key",

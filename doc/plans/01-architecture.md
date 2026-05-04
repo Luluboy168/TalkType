@@ -124,6 +124,7 @@
 | `mute_system_audio` / `restore_system_audio` | audio_control | WASAPI mute |
 | `play_start_sound` / `play_stop_sound` / `play_error_sound` | sound_feedback | 音效 |
 | `set_credential` / `delete_credential` / `has_credential` | credentials (M3) | API key 存進 / 刪除 / 檢查存在於 Windows Credential Vault；frontend 拿不到 key 內容（`get_credential` 是 `pub(crate)` 的 Rust-only function、永不暴露給 IPC，invariant #1） |
+| `get_credential_preview` | credentials (M3) | 回傳 masked preview（`"gsk_aBc…XyZ1"`，前 7 + 後 4 char 中間 `…`）讓 user 識別目前儲存的是哪把 key；masking 在 Rust 內完成、full key 不過 IPC、invariant #1 維持 |
 | `get_settings` / `update_settings` | (Rust state) | 設定統一在 Rust |
 | `get_history_paged` / `add_history` / `delete_history` | database | SQLite 操作 |
 | `get_vocabulary` / `add_vocabulary` / `update_vocabulary` / `delete_vocabulary` | database | 詞彙操作 |

@@ -264,6 +264,49 @@ pub(crate) fn get_credential(provider: &str) -> Result<Option<String>, Credentia
     }
 }
 
+/// Mask an API key into "first 7 chars … last 4 chars" form so the user can
+/// distinguish which key is currently stored without us ever exposing the
+/// full value. Industry standard preview length (GitHub, OpenAI dashboard,
+/// AWS console all use ~4-7 char windows).
+///
+/// Keys shorter than `PREFIX + SUFFIX + 1` (12 chars) get fully masked as
+/// `***` — real provider keys are 40+ chars so this only fires on user
+/// typo / test garbage that somehow passed `validate_and_clean_key`.
+fn mask_key_preview(key: &str) -> String {
+    const PREFIX_LEN: usize = 7;
+    const SUFFIX_LEN: usize = 4;
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() < PREFIX_LEN + SUFFIX_LEN + 1 {
+        return "***".to_string();
+    }
+    let prefix: String = chars[..PREFIX_LEN].iter().collect();
+    let suffix: String = chars[chars.len() - SUFFIX_LEN..].iter().collect();
+    format!("{prefix}…{suffix}")
+}
+
+/// Frontend-safe preview of the stored key for the current provider.
+/// Reads the key from keyring (Rust-only), masks it via `mask_key_preview`,
+/// and returns ONLY the masked string. The full key never crosses IPC —
+/// architecture invariant #1 holds.
+///
+/// Returns:
+///
+///   * `Ok(Some("gsk_aBc…XyZ1"))` — provider has a key, frontend may
+///     render the masked preview alongside "saved" indicator.
+///   * `Ok(None)` — no key set.
+///   * `Err(...)` — invalid provider id or keyring backend error.
+#[tauri::command]
+pub async fn get_credential_preview(
+    _state: State<'_, CredentialsState>,
+    provider: String,
+) -> Result<Option<String>, CredentialsError> {
+    validate_provider(&provider)?;
+    match get_credential(&provider)? {
+        Some(key) => Ok(Some(mask_key_preview(&key))),
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,5 +451,40 @@ mod tests {
         assert!(json.starts_with('"') && json.ends_with('"'));
         assert!(json.contains("got"));
         assert!(json.contains("expected"));
+    }
+
+    #[test]
+    fn mask_key_preview_real_groq_shape() {
+        // Groq keys are gsk_ prefix + ~52 base64-shape chars
+        let fake = "gsk_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789AbCdEfGhIjKlMn";
+        let masked = mask_key_preview(fake);
+        assert_eq!(masked, "gsk_aBc…KlMn");
+        // Confirm: full key did NOT survive in the masked output
+        assert!(!masked.contains("DeFgHi"));
+    }
+
+    #[test]
+    fn mask_key_preview_too_short_returns_stars() {
+        assert_eq!(mask_key_preview(""), "***");
+        assert_eq!(mask_key_preview("short"), "***");
+        assert_eq!(mask_key_preview("eleven_char"), "***"); // 11 chars
+    }
+
+    #[test]
+    fn mask_key_preview_exact_minimum_length() {
+        // 12 chars = PREFIX_LEN(7) + SUFFIX_LEN(4) + 1
+        let masked = mask_key_preview("abcdefghijkl");
+        assert_eq!(masked, "abcdefg…ijkl");
+    }
+
+    #[test]
+    fn mask_key_preview_unicode_safe() {
+        // Confirm we're counting chars not bytes — wouldn't index-panic on
+        // multi-byte UTF-8 even if (unrealistic) a Mandarin "key" got in.
+        // 12 chars: indices 0-7 = "你好世界你好世界", 8-11 = "你好世界"
+        // prefix [0..7] = "你好世界你好世", suffix [8..] = "你好世界"
+        let key = "你好世界你好世界你好世界";
+        let masked = mask_key_preview(key);
+        assert_eq!(masked, "你好世界你好世…你好世界");
     }
 }

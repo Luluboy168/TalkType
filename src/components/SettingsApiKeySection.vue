@@ -31,6 +31,10 @@ const { t } = useI18n();
 const selectedProvider = ref<LlmProviderId>("groq");
 const apiKeyInput = ref<string>("");
 const hasCredential = ref<boolean>(false);
+/** Masked preview ("gsk_aBc…XyZ1") of the stored key so the user can
+ * identify which key is currently saved. `null` when no key set or while
+ * loading. Full key never crosses IPC — masking is Rust-side. */
+const keyPreview = ref<string | null>(null);
 const isSaving = ref<boolean>(false);
 const isDeleting = ref<boolean>(false);
 const isLoadingHasCredential = ref<boolean>(false);
@@ -76,17 +80,24 @@ const placeholderText = computed(() => {
 async function refreshHasCredential(): Promise<void> {
   if (!isProviderActive.value) {
     hasCredential.value = false;
+    keyPreview.value = null;
     return;
   }
   isLoadingHasCredential.value = true;
   errorMessage.value = null;
   try {
-    hasCredential.value = await invoke<boolean>("has_credential", {
+    // Use the masked preview command and infer hasCredential from its
+    // result — saves a second IPC round-trip vs calling has_credential too.
+    // Returns Some("gsk_aBc…XyZ1") when stored, None when no key set.
+    const preview = await invoke<string | null>("get_credential_preview", {
       provider: selectedProvider.value,
     });
+    keyPreview.value = preview;
+    hasCredential.value = preview !== null;
   } catch (err) {
     errorMessage.value = formatError(err);
     hasCredential.value = false;
+    keyPreview.value = null;
   } finally {
     isLoadingHasCredential.value = false;
   }
@@ -413,8 +424,15 @@ onUnmounted(() => {
         v-if="hasCredential"
         class="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2"
       >
-        <span class="text-xs font-medium text-foreground">
-          {{ t("views.settings.apiKey.saved") }}
+        <span class="flex items-center gap-2 text-xs font-medium text-foreground">
+          <span>{{ t("views.settings.apiKey.saved") }}</span>
+          <span
+            v-if="keyPreview"
+            class="font-mono text-muted-foreground"
+            :title="t('views.settings.apiKey.previewTooltip')"
+          >
+            · {{ keyPreview }}
+          </span>
         </span>
         <div class="flex items-center gap-1">
           <Button
@@ -483,3 +501,12 @@ onUnmounted(() => {
     />
   </section>
 </template>
+
+<style scoped>
+/* Hide WebView2 / Edge / IE native password reveal button — we ship our own
+   Eye / EyeOff toggle. Without this, Windows shows two eye icons stacked. */
+:deep(input[type="password"])::-ms-reveal,
+:deep(input[type="password"])::-ms-clear {
+  display: none;
+}
+</style>

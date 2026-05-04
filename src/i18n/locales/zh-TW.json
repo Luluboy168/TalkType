@@ -76,6 +76,7 @@
         "save": "儲存",
         "delete": "刪除",
         "saved": "✅ 已儲存到 keyring",
+        "previewTooltip": "前 7 + 後 4 字、其餘永遠不會被讀回",
         "show": "顯示",
         "hide": "隱藏",
         "getKey": "取得 API key",
