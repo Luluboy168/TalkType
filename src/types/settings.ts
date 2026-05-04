@@ -48,3 +48,26 @@ export interface HotkeyConfig {
   /** Push-to-talk vs tap-to-talk. */
   triggerMode: TriggerMode;
 }
+
+/**
+ * Top-level Settings shape mirroring the Rust `Settings` struct in
+ * `src-tauri/src/settings.rs`. The Rust side serializes with
+ * `#[serde(rename_all = "camelCase")]` so all field names are camelCase
+ * here. v1 only contains `schemaVersion` and `hotkey`; M5-M8 will extend
+ * this interface in place.
+ */
+export interface Settings {
+  /** Persisted schema version. v1 = M4 chunk 3. */
+  schemaVersion: number;
+  /** Global hotkey configuration. Persisted across launches. */
+  hotkey: HotkeyConfig;
+}
+
+/**
+ * Sparse update payload for `update_settings` Tauri command. Every
+ * field is optional; missing fields are left untouched on the Rust
+ * side. M5-M8 will add further `field?: T` here as Settings grows.
+ */
+export interface SettingsPatch {
+  hotkey?: HotkeyConfig;
+}
