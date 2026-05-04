@@ -158,7 +158,10 @@ pub(super) async fn paste_text(
             Ok(())
         })
         .await
-        .map_err(|_| ClipboardError::SendInputFailed { expected: 4 })?
+        .map_err(|e| {
+            eprintln!("[clipboard-paste] paste task panicked: {e:?}");
+            ClipboardError::TaskPanic { stage: "paste" }
+        })?
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -183,7 +186,10 @@ pub(super) async fn copy_to_clipboard(text: String) -> Result<(), ClipboardError
             Ok(())
         })
         .await
-        .map_err(|_| ClipboardError::ClipboardSetFailed("spawn_blocking join error".to_string()))?
+        .map_err(|e| {
+            eprintln!("[clipboard-paste] copy task panicked: {e:?}");
+            ClipboardError::TaskPanic { stage: "copy" }
+        })?
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -206,6 +212,7 @@ pub(super) async fn copy_to_clipboard(text: String) -> Result<(), ClipboardError
 pub(super) fn apply_hud_no_activate_style(
     window: &tauri::WebviewWindow,
 ) -> Result<(), ClipboardError> {
+    use windows::Win32::Foundation::{GetLastError, SetLastError, WIN32_ERROR};
     use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, SetWindowLongPtrW};
 
     let hwnd = window
@@ -214,12 +221,30 @@ pub(super) fn apply_hud_no_activate_style(
     // Tauri 2.11 returns `windows::Win32::Foundation::HWND` directly (same
     // crate version `windows = 0.61` we depend on, ABI-compatible). No
     // conversion needed — we just call into the Win32 functions directly.
-    unsafe {
+    //
+    // SetWindowLongPtrW returns 0 on either prior-zero or error; the only way
+    // to disambiguate is to clear the thread error state first then check
+    // GetLastError after. Reviewer P1 #3: the prior version ignored the
+    // return value, so a silent failure here would defeat the entire focus
+    // chain protection.
+    let new_style = unsafe {
         let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let new_style = ex_style | (WS_EX_NOACTIVATE.0 as isize);
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
-    }
-    eprintln!("[clipboard-paste] applied WS_EX_NOACTIVATE to HUD window");
+        let target = ex_style | (WS_EX_NOACTIVATE.0 as isize);
+        SetLastError(WIN32_ERROR(0));
+        let prior = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, target);
+        if prior == 0 {
+            let last_err = GetLastError().0;
+            if last_err != 0 {
+                return Err(ClipboardError::WindowHandleUnavailable(format!(
+                    "SetWindowLongPtrW(GWL_EXSTYLE) failed: GetLastError={last_err}"
+                )));
+            }
+        }
+        target
+    };
+    eprintln!(
+        "[clipboard-paste] applied WS_EX_NOACTIVATE to HUD window (new GWL_EXSTYLE = {new_style:#x})"
+    );
     Ok(())
 }
 
@@ -711,6 +736,7 @@ mod tests {
             },
             ClipboardError::LockPoisoned,
             ClipboardError::WindowHandleUnavailable("z".to_string()),
+            ClipboardError::TaskPanic { stage: "paste" },
         ];
         for err in cases {
             let json = serde_json::to_string(&err).expect("serialize");

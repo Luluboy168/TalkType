@@ -110,6 +110,16 @@
 - **`AttachThreadInput` thread id 在 user 切視窗 race（M5 dogfood）**：`capture_target_window` 在熱鍵 down 時 capture HWND、user 在錄音中切到別 window、paste 時 attach 的是舊 HWND。SayIt 接受「user-intent locked at hotkey-press time」設計。M5 dogfood 看 user feedback 是否要改 paste-time re-capture（trade-off：re-capture 可能撞到 HUD 自己 vs 鎖在熱鍵時 user 預期）。
 - **Antivirus / EDR 對 `SetWindowsHookExW(WH_KEYBOARD_LL)` 的反應（Phase 2 distribution）**：keyloggers 用同 API、企業 EDR（CrowdStrike / SentinelOne / Defender for Endpoint）會把全鍵盤 hook 標 alert / block。M4 不能 fix；Phase 2 distribution doc 加「企業環境可能誤判」警語、考慮 v0.2 加 code-signing 後 enroll Microsoft SmartScreen reputation。
 
+## M4 chunks 1+2 reviewer findings（2026-05-05 — P1 #1+#3 已修、其餘留下次）
+
+> 由 M4 chunks 1+2 完成後的獨立 code reviewer subagent 找出。P1 #1 (TaskPanic mislabel) 與 P1 #3 (SetWindowLongPtrW return ignored) 立即修了；P1 #2、P1 #4、P2s 留以下：
+
+- **`paste.rs` 768 LOC > 500 軟性 budget — split into `paste/{commands, com, attach, modifiers, ime, input}.rs`（M4 chunk 4 後做、不阻擋 ship）**：CLAUDE.md「檔案大小」軟規則。實作完整 + 充分測試後再拆比較不會 churn。Chunk 4 完成 manual acceptance 後做一次 focused refactor commit。
+- **`OnceLock<HookContext>` 阻擋 process lifetime 內任何 re-install（Phase 2 polish）**：`hotkey_listener/windows.rs` 用 `OnceLock` 存 `HookContext`、`shutdown` drop `HookHandle` 但**沒清** `OnceLock`。Phase 1 single-instance 不會 re-install 不影響、但 Phase 2 dev hot-reload / 測試 harness 需要 re-install 時會 reject。考慮換 `static SHARED_CTX: Mutex<Option<HookContext>>` 支援 `take()` on shutdown。
+- **Slow-hook diagnostic threshold 50ms 在 dev mode 可能噴 log（M5 dogfood）**：`hotkey_listener/windows.rs:347` 警告 `app.emit > 50ms`。Vue HMR 期間 webview 可能 hung、每個 keystroke 觸發。M5 dogfood 看 log frequency；若太多改 200ms threshold 或加 rate-limit `AtomicU64 last_warn_ts`。
+- **`apply_event` 回 `Vec<HotkeyEvent>` 但 Phase 1 永遠 0 或 1 個（micro-opt 候選）**：`hotkey_listener/shared.rs:145`。Phase 2 evaluate 改 `Option<HotkeyEvent>` 或 `SmallVec<[_; 1]>`。Trivial、defer。
+- **`hook_proc` 尾端有一個 wasted atomic load（trivial）**：`hotkey_listener/windows.rs:404` `let _ = state.is_pressed.load(...)` 是 reserved-for-future tracing comment、目前是浪費的 atomic load。下次 touch 該檔時刪掉或實際用。
+
 ## Phase 2 / 後期想法
 
 - **macOS dev setup**：目前 doc 只 describe 設計，沒實機跑過。Phase 2 啟動時要做 spike。

@@ -107,6 +107,14 @@ pub enum ClipboardError {
 
     #[error("Window handle unavailable: {0}")]
     WindowHandleUnavailable(String),
+
+    /// `tokio::task::spawn_blocking` join failed because the inner closure
+    /// panicked. Distinguishes a real panic from a synchronous error variant
+    /// (which would have been propagated through the closure's `Result`).
+    /// Reviewer P1 #1: previous code mislabeled all join errors as
+    /// `SendInputFailed`, hiding the actual stage that panicked.
+    #[error("Paste task panicked during stage '{stage}'")]
+    TaskPanic { stage: &'static str },
 }
 
 // Manual `Serialize` so the frontend receives a flat string rather than a
