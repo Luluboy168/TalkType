@@ -99,6 +99,17 @@
 - **`::-ms-reveal` CSS 從 scoped 搬 global**：M3 polish 把雙 password reveal icon 修在 `SettingsApiKeySection.vue` 的 `<style scoped>`。等 M9 polish 順手把 rule 搬進 `src/assets/index.css` `@layer base`、未來任何新 password input 自動受惠。**搬時刪掉 SettingsApiKeySection.vue 的 scoped 那塊**避免重複。
 - **Real-Groq smoke test under `--features` flag**：本次 session user 提案把 key 放 `.env.local` 給 automated tests 用。當下決定不做（wiremock 31 cases 已涵蓋、real-Groq 是 manual job），但**未來如果想加「Groq API contract 沒改」regression test**：用 `cargo test --features real-groq-smoke` gate、key 從 `GROQ_API_KEY` env var 讀、CI **不**跑、本地 dogfood 才跑。M9 polish candidate（評估 ROI）。
 
+## M4 plan-time challenger P2（2026-05-05 — 不在 M4 scope、留下次）
+
+> 由 M4 開工前 plan-time challenger subagent 找出、main session 對照 plan 後判定優先級。P0 與 P1 已落實在 M4 chunks（修計畫不修 code）；以下 P2 不阻擋 M4 ship、但是 M5 / M9 / Phase 2 候選。
+
+- **多螢幕 + DPI 縮放下 HUD 位置（M5 owns）**：HUD x=center y=50 在 mixed-DPI（4K 主 + 1080p 副）只 cover primary monitor、user 在 secondary monitor 工作會看不到 HUD — 但 paste target 判斷靠 `GetForegroundWindow()`、不依賴 HUD 位置、所以 paste 本身沒 bug。M5 HUD overlay 完成時順手做 multi-monitor + DPI-aware positioning。
+- **藍牙鍵盤 down/up 延遲對 double-tap detection（M5 dogfood）**：藍牙 keyboard 透過 LL hook 收到 batched events、350ms double-tap window 在實機可能不夠（藍牙延遲可達 200-300ms）。M5 dogfood 期收 telemetry 後 tune 到 500ms 或變成 settings。
+- **Hook log keystroke leakage（M9 polish）**：M4 不接 Sentry（Phase 2 才接），但 chunk 1 implementer 若 `println!` debug 印具體 keycode、user 輸入密碼框時可能 leak 進 dev console。M9 audit `hotkey_listener` 所有 `println!` / `eprintln!`、確保只 log「triggered」+ summary、不印具體 vk / keycode / modifier。Phase 2 接 Sentry 時尤其重要（breadcrumb leakage）。
+- **`SetForegroundWindow` 跨 virtual desktop 切換語意（M5 dogfood）**：user 按熱鍵時 target 在 virtual desktop A、轉錄期間 user 切到 desktop B、paste 時 target HWND 還在 A。`SetForegroundWindow` 行為取決於 Windows build（部分 build 自動切 desktop、部分拒絕）。M5 dogfood 觀察是否要 fall back 到 emit `paste:focus-restore-failed` event。
+- **`AttachThreadInput` thread id 在 user 切視窗 race（M5 dogfood）**：`capture_target_window` 在熱鍵 down 時 capture HWND、user 在錄音中切到別 window、paste 時 attach 的是舊 HWND。SayIt 接受「user-intent locked at hotkey-press time」設計。M5 dogfood 看 user feedback 是否要改 paste-time re-capture（trade-off：re-capture 可能撞到 HUD 自己 vs 鎖在熱鍵時 user 預期）。
+- **Antivirus / EDR 對 `SetWindowsHookExW(WH_KEYBOARD_LL)` 的反應（Phase 2 distribution）**：keyloggers 用同 API、企業 EDR（CrowdStrike / SentinelOne / Defender for Endpoint）會把全鍵盤 hook 標 alert / block。M4 不能 fix；Phase 2 distribution doc 加「企業環境可能誤判」警語、考慮 v0.2 加 code-signing 後 enroll Microsoft SmartScreen reputation。
+
 ## Phase 2 / 後期想法
 
 - **macOS dev setup**：目前 doc 只 describe 設計，沒實機跑過。Phase 2 啟動時要做 spike。
