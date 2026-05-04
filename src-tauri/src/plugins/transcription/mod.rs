@@ -174,7 +174,10 @@ mod tests {
             panic!("simulated failure");
         }));
         assert!(result.is_err());
-        assert!(!flag.load(Ordering::Acquire), "guard should reset on unwind");
+        assert!(
+            !flag.load(Ordering::Acquire),
+            "guard should reset on unwind"
+        );
     }
 
     #[test]

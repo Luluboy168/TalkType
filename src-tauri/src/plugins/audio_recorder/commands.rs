@@ -24,7 +24,9 @@ use tauri::{AppHandle, State};
 use super::error::AudioRecorderError;
 use super::recording_thread;
 use super::stream::{self, AudioInputDeviceInfo, StartAck};
-use super::{compute_peak, compute_rms, encode_wav, AudioRecorderState, RecordingHandle, StopRecordingResult};
+use super::{
+    compute_peak, compute_rms, encode_wav, AudioRecorderState, RecordingHandle, StopRecordingResult,
+};
 
 // ─── Tauri commands ────────────────────────────────────────────────────────
 
@@ -75,7 +77,9 @@ pub async fn start_recording(
                 ack_tx,
             );
         })
-        .map_err(|e| AudioRecorderError::BuildStream(format!("spawn audio-recorder thread: {e}")))?;
+        .map_err(|e| {
+            AudioRecorderError::BuildStream(format!("spawn audio-recorder thread: {e}"))
+        })?;
 
     // Wait for the recording thread to either start the stream or error out.
     let sample_rate = match ack_rx.recv() {

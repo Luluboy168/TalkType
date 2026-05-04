@@ -152,7 +152,9 @@ mod tests {
     fn format_whisper_prompt_caps_at_600_chars() {
         // 50 long ASCII terms × ~24 chars each = ~1200 chars body. Should
         // hit the 600-char cap before the 50-term cap.
-        let long: Vec<String> = (0..50).map(|i| format!("verylongtermname_{i:08}")).collect();
+        let long: Vec<String> = (0..50)
+            .map(|i| format!("verylongtermname_{i:08}"))
+            .collect();
         let prompt = format_whisper_prompt(Some(&long)).unwrap();
         let body_len = prompt
             .strip_prefix("Important Vocabulary: ")
@@ -187,7 +189,10 @@ mod tests {
             .unwrap()
             .chars()
             .count();
-        assert!(body_len <= VOCABULARY_CHAR_CAP, "mandarin char cap: {body_len}");
+        assert!(
+            body_len <= VOCABULARY_CHAR_CAP,
+            "mandarin char cap: {body_len}"
+        );
         // Char-cap test for Mandarin: assert it kicks in BEFORE 50-term cap.
         let comma_count = prompt.matches(", ").count();
         assert!(

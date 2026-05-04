@@ -237,9 +237,11 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/openai/v1/audio/transcriptions"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"text":"hello world","segments":[{"no_speech_prob":0.05}]}"#,
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(
+                    r#"{"text":"hello world","segments":[{"no_speech_prob":0.05}]}"#,
+                ),
+            )
             .mount(&server)
             .await;
 
@@ -257,7 +259,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/openai/v1/audio/transcriptions"))
-            .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"error":"Invalid API Key"}"#))
+            .respond_with(
+                ResponseTemplate::new(401).set_body_string(r#"{"error":"Invalid API Key"}"#),
+            )
             .mount(&server)
             .await;
 
@@ -302,7 +306,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = post_to_mock(&server, None).await.expect_err("429 no header");
+        let err = post_to_mock(&server, None)
+            .await
+            .expect_err("429 no header");
         match err {
             TranscriptionError::RateLimited { retry_after_secs } => {
                 assert_eq!(retry_after_secs, None);
@@ -316,7 +322,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/openai/v1/audio/transcriptions"))
-            .respond_with(ResponseTemplate::new(413).set_body_string(r#"{"error":"file too large"}"#))
+            .respond_with(
+                ResponseTemplate::new(413).set_body_string(r#"{"error":"file too large"}"#),
+            )
             .mount(&server)
             .await;
 

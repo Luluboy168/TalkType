@@ -41,7 +41,10 @@ pub enum TranscriptionError {
     /// the same constant (`MAX_WAV_BYTES`) so this is a safety net for any
     /// future code path that might bypass the recorder.
     #[error("Audio exceeds Groq 25 MB limit ({actual_bytes} bytes; max {max_bytes})")]
-    FileTooLarge { actual_bytes: usize, max_bytes: usize },
+    FileTooLarge {
+        actual_bytes: usize,
+        max_bytes: usize,
+    },
 
     /// Another transcription is in flight. The dispatcher's AtomicBool guard
     /// rejects concurrent calls so we don't race on `wav_buffer` or saturate
@@ -141,7 +144,9 @@ pub(crate) fn classify_reqwest_error(e: reqwest::Error) -> TranscriptionError {
         return TranscriptionError::ConnectionRefused;
     }
     let lower = e.to_string().to_lowercase();
-    if lower.contains("dns") || lower.contains("name not resolved") || lower.contains("no such host")
+    if lower.contains("dns")
+        || lower.contains("name not resolved")
+        || lower.contains("no such host")
     {
         return TranscriptionError::DnsFailure(e.to_string());
     }

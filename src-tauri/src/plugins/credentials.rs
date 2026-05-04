@@ -255,8 +255,8 @@ pub async fn has_credential(
 #[allow(dead_code)]
 pub(crate) fn get_credential(provider: &str) -> Result<Option<String>, CredentialsError> {
     validate_provider(provider)?;
-    let entry = Entry::new(SERVICE_NAME, provider)
-        .map_err(|e| CredentialsError::Keyring(e.to_string()))?;
+    let entry =
+        Entry::new(SERVICE_NAME, provider).map_err(|e| CredentialsError::Keyring(e.to_string()))?;
     match entry.get_password() {
         Ok(key) => Ok(Some(key)),
         Err(keyring::Error::NoEntry) => Ok(None),

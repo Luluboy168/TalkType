@@ -53,9 +53,7 @@ pub struct AudioInputDeviceInfo {
 /// (when present) is flagged with `is_default = true`.
 pub fn list_input_devices() -> Result<Vec<AudioInputDeviceInfo>, AudioRecorderError> {
     let host = cpal::default_host();
-    let default_name = host
-        .default_input_device()
-        .and_then(|d| d.name().ok());
+    let default_name = host.default_input_device().and_then(|d| d.name().ok());
 
     let devices = host
         .input_devices()
@@ -381,16 +379,36 @@ where
     let stream_config = supported.config();
 
     match supported.sample_format() {
-        SampleFormat::I8 => build_input_stream_with_callback::<i8, F>(device, &stream_config, on_samples),
-        SampleFormat::I16 => build_input_stream_with_callback::<i16, F>(device, &stream_config, on_samples),
-        SampleFormat::I32 => build_input_stream_with_callback::<i32, F>(device, &stream_config, on_samples),
-        SampleFormat::I64 => build_input_stream_with_callback::<i64, F>(device, &stream_config, on_samples),
-        SampleFormat::U8 => build_input_stream_with_callback::<u8, F>(device, &stream_config, on_samples),
-        SampleFormat::U16 => build_input_stream_with_callback::<u16, F>(device, &stream_config, on_samples),
-        SampleFormat::U32 => build_input_stream_with_callback::<u32, F>(device, &stream_config, on_samples),
-        SampleFormat::U64 => build_input_stream_with_callback::<u64, F>(device, &stream_config, on_samples),
-        SampleFormat::F32 => build_input_stream_with_callback::<f32, F>(device, &stream_config, on_samples),
-        SampleFormat::F64 => build_input_stream_with_callback::<f64, F>(device, &stream_config, on_samples),
+        SampleFormat::I8 => {
+            build_input_stream_with_callback::<i8, F>(device, &stream_config, on_samples)
+        }
+        SampleFormat::I16 => {
+            build_input_stream_with_callback::<i16, F>(device, &stream_config, on_samples)
+        }
+        SampleFormat::I32 => {
+            build_input_stream_with_callback::<i32, F>(device, &stream_config, on_samples)
+        }
+        SampleFormat::I64 => {
+            build_input_stream_with_callback::<i64, F>(device, &stream_config, on_samples)
+        }
+        SampleFormat::U8 => {
+            build_input_stream_with_callback::<u8, F>(device, &stream_config, on_samples)
+        }
+        SampleFormat::U16 => {
+            build_input_stream_with_callback::<u16, F>(device, &stream_config, on_samples)
+        }
+        SampleFormat::U32 => {
+            build_input_stream_with_callback::<u32, F>(device, &stream_config, on_samples)
+        }
+        SampleFormat::U64 => {
+            build_input_stream_with_callback::<u64, F>(device, &stream_config, on_samples)
+        }
+        SampleFormat::F32 => {
+            build_input_stream_with_callback::<f32, F>(device, &stream_config, on_samples)
+        }
+        SampleFormat::F64 => {
+            build_input_stream_with_callback::<f64, F>(device, &stream_config, on_samples)
+        }
         other => Err(AudioRecorderError::BuildStream(format!(
             "unsupported sample format: {other:?}"
         ))),

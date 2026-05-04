@@ -204,10 +204,7 @@ pub(crate) fn compute_rms(samples: &[i16]) -> f32 {
 /// **Note**: synchronous; callers run this inside `tokio::task::spawn_blocking`
 /// so a 30 min / ~115 MB recording doesn't block the tokio runtime (M2 retro
 /// perf finding).
-pub(crate) fn encode_wav(
-    samples: &[i16],
-    sample_rate: u32,
-) -> Result<Vec<u8>, AudioRecorderError> {
+pub(crate) fn encode_wav(samples: &[i16], sample_rate: u32) -> Result<Vec<u8>, AudioRecorderError> {
     use std::io::Cursor;
 
     let spec = hound::WavSpec {

@@ -213,15 +213,12 @@ fn run_preview_thread(
     // Shared ring buffer of recent mono `i16` samples. cpal callback pushes
     // here; the tick loop drains it to compute RMS. Bounded so a paused
     // tick loop doesn't grow memory unboundedly.
-    let ring: Arc<Mutex<VecDeque<i16>>> = Arc::new(Mutex::new(VecDeque::with_capacity(
-        PREVIEW_RING_CAPACITY,
-    )));
+    let ring: Arc<Mutex<VecDeque<i16>>> =
+        Arc::new(Mutex::new(VecDeque::with_capacity(PREVIEW_RING_CAPACITY)));
 
     let ring_for_callback = ring.clone();
-    let cpal_stream = match dispatch_sample_format_with_callback(
-        &device,
-        &supported,
-        move |samples: &[i16]| {
+    let cpal_stream =
+        match dispatch_sample_format_with_callback(&device, &supported, move |samples: &[i16]| {
             let Ok(mut guard) = ring_for_callback.lock() else {
                 eprintln!("[audio-preview] ring lock poisoned in callback");
                 return;
@@ -232,14 +229,13 @@ fn run_preview_thread(
                 }
                 guard.push_back(s);
             }
-        },
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = ack.send(Err(e));
-            return;
-        }
-    };
+        }) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = ack.send(Err(e));
+                return;
+            }
+        };
 
     if let Err(e) = cpal_stream.play() {
         let _ = ack.send(Err(AudioRecorderError::PlayStream(e.to_string())));
