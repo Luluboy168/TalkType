@@ -112,6 +112,26 @@ pnpm tauri dev
 | Anthropic | https://console.anthropic.com/settings/keys |
 | Gemini | https://aistudio.google.com/apikey |
 
+### Behind a corporate proxy?
+
+TalkType 透過 reqwest 預設讀取 `HTTPS_PROXY` / `HTTP_PROXY` 環境變數，所以送往 Groq、OpenAI、Anthropic、Gemini 的 HTTPS 請求會自動走公司 proxy。
+
+PowerShell（這個 session 暫用）：
+
+```powershell
+$env:HTTPS_PROXY = "http://your-proxy.company.com:8080"
+```
+
+PowerShell（永久、之後所有 session 都吃）：
+
+```powershell
+[Environment]::SetEnvironmentVariable("HTTPS_PROXY", "http://your-proxy.company.com:8080", "User")
+```
+
+設定完啟動 TalkType（或跑 `pnpm tauri dev`）即可。
+
+如果公司用 Proxy Auto-Configuration URL（PAC），TalkType 目前不會 parse PAC 檔。Workaround：開 Edge → `edge://net-internals/#proxy` 看 browser 真正在用的 proxy URL，再把 `HTTPS_PROXY` 設成那個值。
+
 ## 貢獻
 
 🚧 Phase 1 開發階段歡迎 issue 與 discussion。PR 歡迎但建議先開 issue 討論。

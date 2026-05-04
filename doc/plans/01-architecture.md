@@ -1,7 +1,7 @@
 # 系統架構
 
-> **狀態**：Draft v1（M1 + M2 IPC contract 已落地、M3 + M6 plan 經 challenger refine）
-> **最後更新**：2026-05-03
+> **狀態**：Draft v1（M1 + M2 + M3 IPC contract 已落地、M6 plan 經 challenger refine）
+> **最後更新**：2026-05-04
 
 ## 高層架構圖
 
@@ -107,6 +107,7 @@
 | `save_recording_file` | audio_recorder/files (M2) | 把 `wav_buffer` 寫到 `recordings/<id>.wav`；`id: Option<String>` (UUID v4 if `null`)；回相對路徑 |
 | `read_recording_file` | audio_recorder/files (M2) | 讀 `recordings/<id>.wav`；id 必須 parse 成 UUID（path-traversal defense）；回 `tauri::ipc::Response`（raw bytes） |
 | `delete_all_recordings` | audio_recorder/files (M2) | 刪除 `recordings/*.wav`、回刪除筆數 `u32` |
+| `delete_recording` | audio_recorder/files (M3) | 刪除單一 `recordings/<id>.wav`（id 必須 parse 成 UUID）、`RecordingNotFound` 若不存在（M2 retro 收尾） |
 | `cleanup_old_recordings` | audio_recorder/files (M2) | 刪除 mtime 超過 `days` 的 `*.wav`、回已刪除 id `Vec<String>` |
 | `transcribe_audio` | transcription | dispatcher：依 settings 派 cloud / local（M3 ship cloud） |
 | `transcribe_cloud` | transcription/cloud (M3) | 內部：送 Groq Whisper、`transcribe_busy` guard、emit `transcription:completed` |
@@ -122,7 +123,8 @@
 | `cancel_hotkey_recording` | hotkey_listener | 取消熱鍵錄製 |
 | `mute_system_audio` / `restore_system_audio` | audio_control | WASAPI mute |
 | `play_start_sound` / `play_stop_sound` / `play_error_sound` | sound_feedback | 音效 |
-| `get_credential` / `set_credential` / `delete_credential` | credentials | API key 存取 Windows Credential Vault |
+| `set_credential` / `delete_credential` / `has_credential` | credentials (M3) | API key 存進 / 刪除 / 檢查存在於 Windows Credential Vault；frontend 拿不到 key 內容（`get_credential` 是 `pub(crate)` 的 Rust-only function、永不暴露給 IPC，invariant #1） |
+| `get_credential_preview` | credentials (M3) | 回傳 masked preview（`"gsk_aBc…XyZ1"`，前 7 + 後 4 char 中間 `…`）讓 user 識別目前儲存的是哪把 key；masking 在 Rust 內完成、full key 不過 IPC、invariant #1 維持 |
 | `get_settings` / `update_settings` | (Rust state) | 設定統一在 Rust |
 | `get_history_paged` / `add_history` / `delete_history` | database | SQLite 操作 |
 | `get_vocabulary` / `add_vocabulary` / `update_vocabulary` / `delete_vocabulary` | database | 詞彙操作 |

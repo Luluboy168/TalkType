@@ -85,6 +85,18 @@
 - **`AudioRecordTest.vue` + `IpcSmokeTest.vue` 在 `src/components/` 混在 production**：M9 移到 `src/components/dev/`。
 - **Capabilities 仍 grant `core:default`** 寬鬆：M9 加 permission audit。
 
+## 待考慮（M3 chunk 3 收穫，M4+ 用得到）
+
+- **`AudioRecordTest` + `IpcSmokeTest` dev-only gating**（reinforce from M2 IDEAS）：M3 chunk 3 確認「測試轉錄」button 是 dev tooling，M9 release prep 一定要 `import.meta.env.DEV` gate 起來、避免進 production bundle。M2 已 flag、再次確認 M9 必做
+- **Test connection 5s auto-clear 是否要 configurable？**：當前 hardcode `TEST_RESULT_CLEAR_MS = 5_000`，理由是「夠看完不擋下次測」。dogfood 期收 user feedback：有些人想要結果 stick 直到下次測 / 切 provider；可能加 settings `test_result_persist: 'auto-clear-5s' | 'until-action'`，M8 settings UI 拓展時看
+- **`pub use health::test_provider_connection;` re-export 沒被 `tauri::generate_handler!` 接受**：chunk 3 踩雷後 `lib.rs` 改寫 `transcription::health::test_provider_connection` 直連，但 `mod.rs` 仍 keep `pub use` 給 Rust 內部用。考慮把所有 commands 都從 `transcription/commands.rs` 模組統一 export（學 audio_recorder 結構），M6 加 `polish_text` 時順手做
+- **`TestConnectionError` vs `TranscriptionError` taxonomy 重複**：兩 enum 都有 `Network*` + `RateLimited` + `ApiError`，M6 加第三組 LLM polish 又要再 copy。M6 可以抽 shared `enum HttpProviderError` trait + 各 module 拼自己 data-layer 變體，避免 3 份 maintenance
+- **Privacy disclosure dialog 第一次顯示時機**：當前是「`hasCredential === false` BEFORE save」觸發、覆寫已存 key 不再 show。dogfood 觀察 user 換 key 是不是想再看一次政策；可能 v0.2 加「永遠 show」option 給 enterprise compliance
+- **AudioRecordTest 「測試轉錄」按完後留 result，但下次「開始錄音」會清掉**：是預期行為（新錄音要清舊結果）。但 user 可能想對同一筆錄音重複 transcribe 比 vocabulary diff — 目前 first transcribe 成功就 take() WAV buffer 沒了。考慮 M8 history view 加「retranscribe」按鈕從 SQLite 重讀 WAV 檔
+- **TranscriptionError → vue 訊息 mapping 是 string-match**：`formatTranscribeError` 用 `raw.startsWith("Audio too small")` 等。如果 Rust `Display` 改字串、UI 訊息會默默 fallback 到 unknown。M9 polish 考慮 Rust 加 `error.code: String` 機器可讀欄位（不影響 user-friendly Display）給 frontend match
+- **「測試轉錄」按鈕 i18n 文字當 status === 'transcribing' 時直接覆寫**（`t("transcribing")` vs `t("transcribe")`）：目前同一 button text 會跳動，改用 statusLabel 顯示更清楚？M9 UX polish
+- **`SettingsApiKeySection.vue` 506 行（軟 budget 500 line）**：M3 chunk 3 加 test connection 後超過 6 行。內容有 cohesion（單一 settings section）但可拆 `useApiKeyTest` composable（test-connection state + formatTestError） + `useApiKeyForm` composable（save/delete + privacy dialog flow），SFC 只剩 wiring + template。M8 Settings 拆 sub-components 時順手做（roadmap 已規劃）
+
 ## Phase 2 / 後期想法
 
 - **macOS dev setup**：目前 doc 只 describe 設計，沒實機跑過。Phase 2 啟動時要做 spike。

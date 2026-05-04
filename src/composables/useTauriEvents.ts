@@ -30,6 +30,14 @@ export const ESCAPE_PRESSED = "escape:pressed" as const;
 export const AUDIO_WAVEFORM = "audio:waveform" as const;
 export const AUDIO_PREVIEW_LEVEL = "audio:preview-level" as const;
 
+// ─── M3 chunk 0: audio recorder safety / abort events ─────────────────────
+
+/** Emitted when the recording auto-aborts (size cap reached, mic unplugged, ...). */
+export const AUDIO_RECORDING_ABORTED = "audio:recording-aborted" as const;
+/** Emitted when `stream.pause()` fails — release-build alternative to the
+ * dev-only `SECURITY:` stderr log. M5 will surface visibly in the HUD. */
+export const AUDIO_MIC_SAFETY_WARNING = "audio:mic-safety-warning" as const;
+
 // ─── M7: local transcription / model download ──────────────────────────────
 
 export const TRANSCRIPTION_PROGRESS = "transcription:progress" as const;
@@ -63,6 +71,8 @@ export const EVENT_NAMES = {
   ESCAPE_PRESSED,
   AUDIO_WAVEFORM,
   AUDIO_PREVIEW_LEVEL,
+  AUDIO_RECORDING_ABORTED,
+  AUDIO_MIC_SAFETY_WARNING,
   TRANSCRIPTION_PROGRESS,
   MODEL_DOWNLOAD_PROGRESS,
   SETTINGS_UPDATED,

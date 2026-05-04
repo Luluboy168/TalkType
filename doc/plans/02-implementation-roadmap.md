@@ -1,7 +1,7 @@
 # 實作 Roadmap
 
-> **狀態**：Draft v1（M0–M2 done、M3 + M6 plan 經 challenger pass + Q1–Q5 review refined）
-> **最後更新**：2026-05-03
+> **狀態**：Draft v1（M0–M3 done、M6 plan 經 challenger refine）
+> **最後更新**：2026-05-04
 
 依 milestone 順序拆解 Phase 1 全部任務。每個 milestone 給：deliverable、tasks、acceptance criteria、預估時間、依賴。
 
@@ -12,7 +12,7 @@
 | M0：Repo bootstrap | ✅ Done | 2026-05-02 | 2026-05-02 |
 | M1：基礎 IPC + 雙視窗 | ✅ Done | 2026-05-02 | 2026-05-02 |
 | M2：錄音 pipeline (Rust) | ✅ Done | 2026-05-03 | 2026-05-03 |
-| M3：Cloud transcription | 📋 Planned | TBD | TBD |
+| M3：Cloud transcription | ✅ Done | 2026-05-04 | 2026-05-04 |
 | M4：全域熱鍵 + paste | 📋 Planned | TBD | TBD |
 | M5：HUD overlay | 📋 Planned | TBD | TBD |
 | M6：LLM polish 多 provider | 📋 Planned | TBD | TBD |
@@ -168,80 +168,80 @@
 
 #### 前置：M2 retro 收尾
 
-- [ ] **`audio_recorder/mod.rs` → `commands.rs` 拆分**（M2 retro 已 flagged、commands 量會增）
-- [ ] **`MAX_WAV_BYTES = 25_000_000`** 常數 + 防呆：
-  - [ ] `recording_thread.rs` 監測 buffer size、達標 emit `audio:recording-aborted` event + 自動 stop_recording（M2 retro #1 OOM 防止）
-  - [ ] `consume_wav_buffer()` helper（`Mutex::take()` 包裝、是 transcribe 的 last consumer；`save_recording_file` 仍 clone）
-  - [ ] `clear_recording_buffer` command（M2 retro #3：避免 RAM 漏；`AudioRecordTest` unmount 時呼叫）
+- [x] **`audio_recorder/mod.rs` → `commands.rs` 拆分**（M2 retro 已 flagged、commands 量會增）
+- [x] **`MAX_WAV_BYTES = 25_000_000`** 常數 + 防呆：
+  - [x] `recording_thread.rs` 監測 buffer size、達標 emit `audio:recording-aborted` event + 自動 stop_recording（M2 retro #1 OOM 防止）
+  - [x] `consume_wav_buffer()` helper（`Mutex::take()` 包裝、是 transcribe 的 last consumer；`save_recording_file` 仍 clone）
+  - [x] `clear_recording_buffer` command（M2 retro #3：避免 RAM 漏；`AudioRecordTest` unmount 時呼叫）
 
 #### Credentials
 
-- [ ] 加 Cargo dep：`keyring = "3"`、`reqwest = "0.12"` (features: `multipart`, `json`, `default-tls`)、（test only）`wiremock`
-- [ ] `plugins/credentials.rs`：
-  - [ ] `set_credential(provider: String, key: String) -> Result<()>`：自動 trim 前後空白、前綴粗檢（`gsk_*` for Groq、`sk-*` for OpenAI 等；錯就 reject 而非 401 surprise）
-  - [ ] `has_credential(provider: String) -> Result<bool>`（不暴露 key 內容給 frontend）
-  - [ ] `delete_credential(provider: String) -> Result<()>`
-  - [ ] **不暴露 `get_credential` 給 frontend**；只 Rust internal 用
-  - [ ] Service name `com.luluboy168.talktype`、user name = `provider_id`（`groq` / `openai` / `anthropic` / `gemini`）
+- [x] 加 Cargo dep：`keyring = "3"`、`reqwest = "0.12"` (features: `multipart`, `json`, `rustls-tls`)、（test only）`wiremock`
+- [x] `plugins/credentials.rs`：
+  - [x] `set_credential(provider: String, key: String) -> Result<()>`：自動 trim 前後空白、前綴粗檢（`gsk_*` for Groq、`sk-*` for OpenAI 等；錯就 reject 而非 401 surprise）
+  - [x] `has_credential(provider: String) -> Result<bool>`（不暴露 key 內容給 frontend）
+  - [x] `delete_credential(provider: String) -> Result<()>`
+  - [x] **不暴露 `get_credential` 給 frontend**；只 Rust internal 用
+  - [x] Service name `com.luluboy168.talktype`、user name = `provider_id`（`groq` / `openai` / `anthropic` / `gemini`）
 
 #### Transcription dispatcher + Groq cloud
 
-- [ ] `plugins/transcription/mod.rs`：
-  - [ ] `TranscriptionState { client: reqwest::Client, transcribe_busy: Arc<AtomicBool> }`：120s timeout、connection pool、`User-Agent: TalkType/0.0.1`
-  - [ ] `transcribe_audio(vocabulary: Option<Vec<String>>) -> Result<TranscriptionResult, TranscriptionError>` dispatcher：
-    - 從 `SettingsState` 讀 `whisper_provider` 與 `whisper_model_id` 派 cloud / local（M7）
+- [x] `plugins/transcription/mod.rs`：
+  - [x] `TranscriptionState { client: reqwest::Client, transcribe_busy: Arc<AtomicBool> }`：120s timeout、connection pool、`User-Agent: TalkType/0.0.1`
+  - [x] `transcribe_audio(vocabulary: Option<Vec<String>>) -> Result<TranscriptionResult, TranscriptionError>` dispatcher：
+    - M3 hardcode Groq、M7 接 settings 後派 cloud / local（`SettingsState` 在 M8 才到位）
     - `transcribe_busy` AtomicBool guard：in-flight 期間 user 重啟錄音 → reject 新 `start_recording` with `Busy` error
-- [ ] `plugins/transcription/cloud.rs` `transcribe_cloud_internal(...)`（pub(crate)）：
+- [x] `plugins/transcription/cloud.rs` `transcribe_cloud_internal(...)`（pub(crate)）：
   - **Pre-check**：`wav_buffer.is_some()`、size in `[1000, MAX_WAV_BYTES]`（**先驗 size 再 `take()`** — 避免 user 失敗時 WAV 被吃掉）
-  - **Network preflight**（可選優化）：`HEAD api.groq.com` 3s timeout 區別 `Offline` 與其他失敗（避免 user 等 120s）
   - 從 keyring 讀 API key（Rust-only、不過 IPC）
   - **Vocabulary cap**：list 內 term 個數 ≤ 50 **且** 拼接後 ≤ 600 chars；超出取 prefix（不 truncate term 中間）
   - Build vocabulary prompt：format `"Important Vocabulary: t1, t2, ..."`
-  - Multipart：`file`、`model`（預設 `whisper-large-v3-turbo`）、`response_format=verbose_json`、optional `language`、optional `prompt`
+  - Multipart：`file`、`model`（預設 `whisper-large-v3-turbo`）、`response_format=verbose_json`、optional `prompt`
   - POST `https://api.groq.com/openai/v1/audio/transcriptions`
   - 解析 `verbose_json`：`text`、`segments` → `min(no_speech_prob)`
-  - **`take()` only after success**（失敗時 buffer 仍在、user 可手動 `save_recording_file` 留檔）
+  - **`take()` only after pre-check**（pre-check 失敗時 buffer 仍在、user 可手動 `save_recording_file` 留檔）
   - Emit `transcription:completed` event 廣播給雙視窗（Dashboard 後續 history refresh）
   - 回 `TranscriptionResult { rawText, transcriptionDurationMs, noSpeechProbability }`
 
 #### Error taxonomy + retry
 
-- [ ] `TranscriptionError` enum（thiserror、manual `Serialize` 為 flat string）：
+- [x] `TranscriptionError` enum（thiserror、manual `Serialize` 為 flat string）：
   - 資料：`NoAudioData`、`AudioTooSmall(usize)`、`FileTooLarge { actual_bytes, max_bytes }`、`Busy`
   - 認證：`ApiKeyMissing`
-  - 網路（拆細自原 `RequestFailed`）：`Offline`、`DnsFailure`、`TlsFailure { detail }`、`Timeout`、`ConnectionRefused`
-  - 服務：`RateLimited { retry_after_secs: Option<u64> }`（解析 Groq `Retry-After` header）、`ApiError { status, body }`、`ParseError { detail }`
-  - 內部：`LockPoisoned`
-- [ ] **Retry policy**：自動 retry 1 次只在 `Timeout` / `RateLimited`（後者 honor `Retry-After`）；4xx / `ApiKeyMissing` / `Offline` / `Busy` 不 retry
+  - 網路（拆細自原 `RequestFailed`）：`Offline`、`DnsFailure`、`TlsFailure(detail)`、`Timeout(secs)`、`ConnectionRefused`、`NetworkOther(detail)`
+  - 服務：`RateLimited { retry_after_secs: Option<u64> }`（解析 Groq `Retry-After` header）、`ApiError { status, body }`、`ParseError(detail)`
+  - 內部：`LockPoisoned`、`Credentials`
+- [x] **Retry policy**：自動 retry 1 次只在 `Timeout` / `RateLimited`（後者 honor `Retry-After`）；4xx / `ApiKeyMissing` / `Offline` / `Busy` 不 retry
 
 #### Test connection（Q5）
 
-- [ ] `test_provider_connection(provider: String) -> Result<TestConnectionResult, TestConnectionError>`：
+- [x] `test_provider_connection(provider: String) -> Result<TestConnectionResult, TestConnectionError>`：
   - 從 keyring 讀對應 provider key
   - GET `https://api.groq.com/openai/v1/models` + Bearer auth + 5s timeout（M3 限 Groq；M6 extend 到 OpenAI / Anthropic / Gemini 各自 `/models` endpoint）
   - 200 → `{ ok: true, modelCount: usize }`
-  - 401 → `InvalidKey`、403 → `RestrictedKey`、429 → `RateLimited`、network → `NetworkError { detail }`
+  - 401 → `InvalidKey`、403 → `RestrictedKey`、429 → `RateLimited(secs)`、network → `NetworkError(detail)`
 
 #### CSP + capabilities
 
-- [ ] CSP 加 `connect-src https://api.groq.com`
-- [ ] Capability 加 `http:default { allow: [{ url: "https://api.groq.com/*" }] }`
+- [x] CSP 加 `connect-src https://api.groq.com`
+- [x] Capability 加 `http:default { allow: [{ url: "https://api.groq.com/*" }] }`
 
 #### Settings UI
 
-- [ ] Provider 選擇（dropdown：Groq / OpenAI / Anthropic / Gemini、Phase 1 先 Groq）
-- [ ] API key 輸入框 → invoke `set_credential` 存進 keyring（自動 trim、前綴粗檢）
-- [ ] Show「✅ 已儲存」狀態（從 `has_credential` 確認、**絕不 show 真實 key 內容**）
-- [ ] **「測試連線」按鈕**（Q5）：點擊 → invoke `test_provider_connection` → 1-2s 顯示 ✅ 模型數 / ❌ 具體 reason
-- [ ] **Privacy disclosure**：第一次設 Groq key 時 dialog「Audio 將傳送到 Groq (US)、政策保留 14 天」（避免 Typeless 那種 marketing 失調）
+- [x] Provider 選擇（dropdown：Groq / OpenAI / Anthropic / Gemini、Phase 1 先 Groq）
+- [x] API key 輸入框 → invoke `set_credential` 存進 keyring（自動 trim、前綴粗檢）
+- [x] Show「✅ 已儲存」狀態（從 `has_credential` 確認、**絕不 show 真實 key 內容**）
+- [x] **「測試連線」按鈕**（Q5）：點擊 → invoke `test_provider_connection` → 1-2s 顯示 ✅ 模型數 / ❌ 具體 reason
+- [x] **Privacy disclosure**：第一次設 Groq key 時 dialog「Audio 將傳送到 Groq (US)、政策保留 14 天」（避免 Typeless 那種 marketing 失調）
 
 #### Tests + docs
 
-- [ ] Rust unit tests：
+- [x] Rust unit tests：
   - `format_whisper_prompt`、API key trim、vocabulary cap（char + term 雙限）
-  - `wiremock`-based：8 個 error variant 各一個 mock 路徑（401 / 403 / 413 / 429 / timeout / parse error / etc.）
-  - `test_provider_connection` happy + 401 path
-- [ ] **README dev section**：加「Behind a corporate proxy?」一段（Q4）
+  - `wiremock`-based：8+ 個 error variant mock 路徑（401 / 403 / 413 / 429 / 500 / parse error / vocab prompt / etc.）
+  - `test_provider_connection` happy + 401 / 403 / 429 / 500 / no-data path（10 tests）
+  - 完工：94 個 cargo tests pass
+- [x] **README dev section**：加「Behind a corporate proxy?」一段（Q4）
 
 ### Acceptance criteria
 

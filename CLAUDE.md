@@ -238,7 +238,7 @@ Phase 1 設好以下 hooks（學 SayIt）：
 1. **拆解任務**：先把工作拆成小的、獨立可平行的子任務（用 TodoWrite 追蹤）
 2. **Dispatch subagents（Opus 4.7）執行實作**：每個子任務派遣 subagent 處理（指定 `model: opus`），主 session 不直接寫 code
 3. **完成後 dispatch subagents（Opus 4.7）做 code review + 功能測試**：每個 feature / 任務完成後，派另一組 subagent（`model: opus`，可用 `superpowers:code-reviewer`）進行獨立 code review 與功能測試 — 避免 implementer 自己 review 的盲點
-4. **UI 變更必須截圖驗證**：若涉及 UI，subagent 必須用 Playwright 截圖並用 Read 工具檢視（或附給主 session 檢視），確認 UI 符合預期才算完成
+4. **UI 變更必須測「互動狀態」、不只截「初始 shape」**：若涉及 UI，subagent 必須用 Playwright 模擬 user 輸入 / 點擊 / 觸發錯誤、並截**每一個關鍵 state**（empty / filled / clicked / loading / success / error）、全部用 Read 工具檢視。**只截初始空白頁不夠** — 像 `::-ms-reveal`（Edge 原生 password reveal）、focus ring、error 訊息、loading spinner 這類「只有互動後才出現」的 bug 會被漏掉。SOP：(1) 截 initial、(2) `browser_type` / `browser_fill_form` 填輸入、(3) 截 filled state、(4) `browser_click` 觸發 action、(5) 截 post-action、(6) 有 error 路徑就觸發、截 error state、(7) 全部 screenshots Read 一次目視確認。
 5. **Plan-time challenger（每個 milestone 開工前）**：與「拆計畫」**同一則 message 平行** dispatch 一個 challenger subagent（Opus 4.7、`general-purpose`），讀同樣的 spec，從 perf / UX / 安全 / 邊界條件 / 可測試性 / 依賴假設下手提出「沒考慮過的問題」。主 session 把 challenger 的 findings 對照計畫、**修計畫後**才 dispatch 真 implementer。修計畫比修代碼便宜。
 6. **Retro challenger（每個 milestone 完成後）**：dispatch 一個 challenger subagent 讀完整 session log + 對應 commits，產出「latent 問題 / UX 缺口 / perf 風險」清單，append 進 `.claude/IDEAS.md`，抓 chunk-by-chunk reviewer 漏掉的整體性問題。
 
@@ -248,6 +248,26 @@ Phase 1 設好以下 hooks（學 SayIt）：
 - UI 視覺檢查比 type check 可靠（type check 過 ≠ UI 對）
 - Reviewer 看「程式碼正不正確」、Challenger 看「計畫對不對 / 整體有沒有 latent 問題」— 兩者覆蓋不同盲區，不重複工
 - Plan-time challenger 在 implementer 開工前介入，避免錯誤計畫被忠實實作出來；Retro challenger 在 milestone 完成後總結，把 chunk-level reviewer 抓不到的整體性問題沉澱成下個 milestone 可參考的 IDEAS
+
+## 常見踩雷（Known recurring pitfalls）
+
+### shadcn-vue CLI 會把 Google Fonts `@import` 加回 `src/assets/index.css`
+
+每次跑 `pnpm dlx shadcn-vue@latest add <component>` 或 `corepack pnpm exec shadcn-vue add <component>` 加新 UI 元件時，**CLI 會在 `src/assets/index.css` 第 1-7 行重新插入**：
+
+```css
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap');
+
+/*
+   ---break---
+   */
+```
+
+這違反 M0 follow-up「Geist Google Fonts → `@fontsource-variable/geist`（offline + CSP friendly）」。在 M2 chunk 3 與 M3 chunk 1 都已踩雷。
+
+**規範**：implementer 跑完 `shadcn-vue add ...` **必須** revert 這 7 行（保留 `@import "tailwindcss"` 開始的部分）。Reviewer 必須 grep `fonts.googleapis.com` 在 `src/assets/index.css` 確認沒有 regression。
+
+未來考慮：寫個 post-add `cleanup-shadcn.sh` script 或 git pre-commit hook 自動 strip。
 
 ## 工作流程提醒
 

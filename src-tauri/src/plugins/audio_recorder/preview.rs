@@ -34,9 +34,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use super::error::AudioRecorderError;
+use super::events::emit_mic_safety_warning;
 use super::stream::{
     determine_input_config, dispatch_sample_format_with_callback, select_input_device,
 };
+
+/// Source tag used in eprintln + emit helpers so log scrubs find both sides.
+const SOURCE_TAG: &str = "[audio-preview]";
 
 /// Tauri event name for the per-30-ms RMS preview level.
 const EVENT_PREVIEW_LEVEL: &str = "audio:preview-level";
@@ -244,11 +248,9 @@ fn run_preview_thread(
 
     if ack.send(Ok(())).is_err() {
         // Caller went away before ack — tear down immediately.
-        eprintln!("[audio-preview] caller dropped ack rx; aborting preview");
+        eprintln!("{SOURCE_TAG} caller dropped ack rx; aborting preview");
         if let Err(e) = cpal_stream.pause() {
-            eprintln!(
-                "[audio-preview] SECURITY: stream.pause() failed — mic may still be active: {e}"
-            );
+            emit_mic_safety_warning(&app, SOURCE_TAG, e.to_string());
         }
         drop(cpal_stream);
         return;
@@ -292,9 +294,7 @@ fn run_preview_thread(
 
     // Mic-safety contract.
     if let Err(e) = cpal_stream.pause() {
-        eprintln!(
-            "[audio-preview] SECURITY: stream.pause() failed — mic may still be active: {e}"
-        );
+        emit_mic_safety_warning(&app, SOURCE_TAG, e.to_string());
     }
     drop(cpal_stream);
 }

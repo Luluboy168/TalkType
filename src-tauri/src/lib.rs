@@ -2,8 +2,18 @@
 //
 // Phase 1 progress:
 //   - M1 (basic IPC + dual window) — done
-//   - M2 (audio recorder pipeline) — chunk 1 wires the audio_recorder plugin
-//     state + commands here; the FFT waveform / preview path land in chunk 2.
+//   - M2 (audio recorder pipeline) — done; 11 audio_recorder commands wired below
+//   - M3 chunk 1 (credentials) — wires `CredentialsState` + 3 commands
+//     (set / delete / has). `get_credential` stays Rust-only and is consumed
+//     by `transcription` (chunk 2) + `llm_polish` (M6).
+//   - M3 chunk 2 (transcription dispatcher + Groq cloud) — wires
+//     `TranscriptionState` + `transcribe_audio` command. The dispatcher reads
+//     keyring directly via `credentials::get_credential` and emits
+//     `transcription:completed` for both windows on success.
+//   - M3 chunk 3 (Q5 connectivity health + UX surfaces) — adds
+//     `test_provider_connection` (Groq `/models` GET) so the Settings page
+//     can verify a freshly-saved key works without burning a transcription
+//     quota slot. Future M6 extends to other 3 providers.
 //
 // Window layout: HUD (`main`, transparent overlay) + Dashboard (`main-window`).
 // Tray icon with "Open Dashboard" + "Quit" menu items, left-click focuses
@@ -27,7 +37,7 @@ use tauri::{
     AppHandle, Emitter, Manager, WindowEvent,
 };
 
-use plugins::audio_recorder;
+use plugins::{audio_recorder, credentials, transcription};
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -145,9 +155,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(audio_recorder::AudioRecorderState::new())
         .manage(audio_recorder::AudioPreviewState::new())
+        .manage(credentials::CredentialsState::new())
         .setup(|app| {
             let handle = app.handle().clone();
             build_tray_icon(&handle)?;
+            // `TranscriptionState::new()` is fallible (reqwest client builder
+            // can fail on TLS init). Doing it here lets the error propagate
+            // through the `setup` Result chain.
+            app.manage(transcription::TranscriptionState::new()?);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -164,16 +179,37 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
-            audio_recorder::start_recording,
-            audio_recorder::stop_recording,
-            audio_recorder::list_audio_input_devices,
-            audio_recorder::get_default_input_device_name,
+            audio_recorder::commands::start_recording,
+            audio_recorder::commands::stop_recording,
+            audio_recorder::commands::clear_recording_buffer,
+            audio_recorder::commands::list_audio_input_devices,
+            audio_recorder::commands::get_default_input_device_name,
             audio_recorder::preview::start_audio_preview,
             audio_recorder::preview::stop_audio_preview,
             audio_recorder::files::save_recording_file,
             audio_recorder::files::read_recording_file,
+            audio_recorder::files::delete_recording,
             audio_recorder::files::delete_all_recordings,
             audio_recorder::files::cleanup_old_recordings,
+            // M3 chunk-1: credentials. NOTE: `get_credential` is intentionally
+            // NOT registered here — it is `pub(crate)` and called from
+            // transcription / llm_polish modules in Rust only. Architecture
+            // invariant #1: API key never crosses the IPC boundary.
+            credentials::set_credential,
+            credentials::delete_credential,
+            credentials::has_credential,
+            // Frontend-safe masked preview ("gsk_aBc…XyZ1") so the user can
+            // identify which key is currently stored. Full key never crosses
+            // IPC — masking happens Rust-side.
+            credentials::get_credential_preview,
+            // M3 chunk-2: transcription. `transcribe_audio` is the single
+            // frontend entry point; M7 will keep the same command and route
+            // internally to local whisper.cpp when settings select it.
+            transcription::transcribe_audio,
+            // M3 chunk-3 (Q5): provider connectivity health check. M3 ships
+            // Groq; M6 will extend the same command to OpenAI / Anthropic
+            // / Gemini by adding match arms in `transcription/health.rs`.
+            transcription::health::test_provider_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

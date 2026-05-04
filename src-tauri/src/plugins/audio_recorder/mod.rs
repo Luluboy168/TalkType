@@ -1,18 +1,23 @@
-// Audio recorder plugin (M2 chunk 1).
+// Audio recorder plugin (M2 + M3 chunk-0).
 //
 // Public surface:
 //
 //   State         AudioRecorderState
-//   Commands      start_recording, stop_recording,
+//   Commands      start_recording, stop_recording, clear_recording_buffer
 //                 list_audio_input_devices, get_default_input_device_name,
-//                 save_recording_file, read_recording_file,
+//                 save_recording_file, read_recording_file, delete_recording,
 //                 delete_all_recordings, cleanup_old_recordings
 //
 // Submodules:
 //
-//   error.rs   — `AudioRecorderError` (thiserror + manual flat-string Serialize)
-//   stream.rs  — cpal device selection + sample-format dispatch
-//   files.rs   — recordings/<id>.wav read/save/cleanup commands
+//   error.rs            — `AudioRecorderError` (thiserror + manual flat-string Serialize)
+//   events.rs           — `RecordingAbortedPayload` / `MicSafetyPayload` + emit helpers
+//   stream.rs           — cpal device selection + sample-format dispatch
+//   recording_thread.rs — body of the named "audio-recorder" thread
+//   preview.rs          — independent mic preview path
+//   waveform.rs         — FFT 6-band processor
+//   files.rs            — recordings/<id>.wav read/save/cleanup commands
+//   commands.rs         — top-level Tauri commands (start/stop/list/default)
 //
 // **Threading model**
 //
@@ -25,7 +30,13 @@
 // Communication between the Tauri command thread and the recording thread:
 //
 //   * `should_stop: Arc<AtomicBool>` — flipped to true by `stop_recording`
-//     to signal the recording thread to pause + drop the stream.
+//     to signal the recording thread to pause + drop the stream. Also flipped
+//     by the recording thread itself when it aborts on `MAX_WAV_BYTES` or a
+//     mic-disconnect (M3 chunk 0).
+//   * `mic_disconnected: Arc<AtomicBool>` — set by the cpal `err_fn` when a
+//     stream-level error fires. The recording thread polls this alongside
+//     `should_stop` and emits `audio:recording-aborted { reason: 'mic_unplug' }`
+//     before tearing down (M2 retro: mic-unplug detection).
 //   * `samples: Arc<Mutex<Vec<i16>>>` — the cpal callback pushes mono i16
 //     samples here; `stop_recording` snapshots them after thread join.
 //   * `mpsc::channel<StartAck>` — a single-shot ack from the recording
@@ -39,32 +50,59 @@
 // Arc-cycle bug on macOS where dropping the stream alone may not call
 // `AudioOutputUnitStop` — leaving the mic active after the user thinks
 // recording stopped. If `pause()` returns `Err`, we log a `SECURITY:` line
-// so it shows up in any future log scrub. Phase 1 is Windows-only, but the
-// pattern stays for Phase 2 macOS.
+// AND emit `audio:mic-safety-warning` to the frontend (eprintln! is
+// invisible in release builds — M2 retro #2). Phase 1 is Windows-only, but
+// the pattern stays for Phase 2 macOS.
+//
+// **WAV size cap**: the recording thread monitors the i16 buffer size and
+// auto-aborts when it would produce a WAV larger than `MAX_WAV_BYTES`. The
+// constant doubles as M3's Groq upload cap (matches OpenAI Whisper API
+// limit) and as an OOM defense (M2 retro #1) so a forgotten Toggle-mode
+// session can't grow unbounded.
 
+pub mod commands;
 pub mod error;
+pub mod events;
 pub mod files;
 pub mod preview;
 pub mod recording_thread;
 pub mod stream;
 pub mod waveform;
 
-use std::io::Cursor;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
 
 pub use error::AudioRecorderError;
 pub use preview::AudioPreviewState;
 pub use stream::{AudioInputDeviceInfo, StartAck};
-// NOTE: file-management Tauri commands live in `files.rs` and must be wired
-// via their full module path (`audio_recorder::files::save_recording_file`,
-// etc.) in `lib.rs`. Re-exporting them here would lose the auxiliary symbols
-// that `#[tauri::command]` generates next to each function.
+// NOTE: Tauri commands are NOT `pub use`d up — `#[tauri::command]` generates
+// auxiliary symbols (`__cmd__*`, `__tauri_command_name_*`) sibling to each
+// command function that a `pub use` does NOT pull along. `lib.rs` wires
+// each command via its full module path (`audio_recorder::commands::*`,
+// `audio_recorder::files::*`, `audio_recorder::preview::*`).
+
+// ─── Constants ─────────────────────────────────────────────────────────────
+
+/// Hard cap on the encoded WAV size for a single recording. 25 MB matches
+/// Groq's `audio.transcriptions` upload cap (and OpenAI Whisper API), and
+/// also serves as an OOM defense if the user forgets a Toggle-mode session
+/// (M2 retro #1).
+///
+/// Computed against the i16 sample buffer (`samples.len() * 2`) — the WAV
+/// header is a tiny ~44-byte fixed cost and we always abort *before* the
+/// cap so the encoded WAV never exceeds it.
+///
+/// At 16 kHz mono i16 this is ~13 minutes of audio. The recording thread
+/// monitors `samples.len() * 2` against this and emits
+/// `audio:recording-aborted { reason: 'max_size' }` when reached.
+pub const MAX_WAV_BYTES: usize = 25_000_000;
+
+/// Bytes per i16 sample. Used by the recording-thread size monitor.
+pub(crate) const BYTES_PER_SAMPLE: usize = 2;
 
 // ─── State ─────────────────────────────────────────────────────────────────
 
@@ -74,6 +112,7 @@ pub use stream::{AudioInputDeviceInfo, StartAck};
 pub struct RecordingHandle {
     pub thread: JoinHandle<()>,
     pub should_stop: Arc<AtomicBool>,
+    pub mic_disconnected: Arc<AtomicBool>,
     pub samples: Arc<Mutex<Vec<i16>>>,
     /// Negotiated stream sample rate (after `determine_input_config`). Drives
     /// the WAV header on stop.
@@ -98,6 +137,19 @@ impl AudioRecorderState {
             wav_buffer: Mutex::new(None),
         }
     }
+
+    /// Take ownership of the buffered WAV bytes, leaving `None` behind.
+    /// Designed for M3's `transcribe_cloud` which is the WAV's last consumer
+    /// — `save_recording_file` (which may run before transcribe) still
+    /// `clone()`s instead.
+    ///
+    /// Returns `Ok(None)` if no WAV is buffered.
+    pub fn consume_wav_buffer(&self) -> Result<Option<Vec<u8>>, AudioRecorderError> {
+        self.wav_buffer
+            .lock()
+            .map(|mut guard| guard.take())
+            .map_err(|e| AudioRecorderError::LockPoisoned(e.to_string()))
+    }
 }
 
 impl Default for AudioRecorderState {
@@ -117,169 +169,10 @@ pub struct StopRecordingResult {
     pub sample_count: usize,
 }
 
-// ─── Tauri commands ────────────────────────────────────────────────────────
-
-/// Begin a new recording. Errors out if a recording is already in progress.
-///
-/// Spawns the `"audio-recorder"` thread that owns the cpal stream. Blocks on
-/// the startup ack so the caller sees the same error domain regardless of
-/// where setup failed.
-#[tauri::command]
-pub async fn start_recording(
-    app: AppHandle,
-    state: State<'_, AudioRecorderState>,
-    device_name: Option<String>,
-) -> Result<(), AudioRecorderError> {
-    {
-        let guard = state
-            .recording
-            .lock()
-            .map_err(|e| AudioRecorderError::LockPoisoned(e.to_string()))?;
-        if guard.is_some() {
-            return Err(AudioRecorderError::BuildStream(
-                "recording already in progress".to_string(),
-            ));
-        }
-    }
-
-    let should_stop = Arc::new(AtomicBool::new(false));
-    let samples = Arc::new(Mutex::new(Vec::<i16>::new()));
-
-    let (ack_tx, ack_rx) = mpsc::channel::<StartAck>();
-
-    let stop_flag = should_stop.clone();
-    let samples_for_thread = samples.clone();
-    let device_name_owned = device_name.clone();
-    let app_for_thread = app.clone();
-
-    let thread_handle = thread::Builder::new()
-        .name("audio-recorder".to_string())
-        .spawn(move || {
-            recording_thread::run_recording_thread(
-                app_for_thread,
-                device_name_owned,
-                samples_for_thread,
-                stop_flag,
-                ack_tx,
-            );
-        })
-        .map_err(|e| AudioRecorderError::BuildStream(format!("spawn audio-recorder thread: {e}")))?;
-
-    // Wait for the recording thread to either start the stream or error out.
-    let sample_rate = match ack_rx.recv() {
-        Ok(Ok(rate)) => rate,
-        Ok(Err(err)) => {
-            // Thread already returned; join to surface any panic.
-            let _ = thread_handle.join();
-            return Err(err);
-        }
-        Err(e) => {
-            // Sender dropped without sending — thread panicked before play().
-            let _ = thread_handle.join();
-            return Err(AudioRecorderError::BuildStream(format!(
-                "audio-recorder thread closed channel before ack: {e}"
-            )));
-        }
-    };
-
-    // Reserve ~30 s of mono i16 at the negotiated rate. Done from the command
-    // thread (rather than in the cpal callback) to keep the audio callback
-    // off the allocator hot path. Lock contention is fine here — cpal hasn't
-    // produced data yet.
-    if let Ok(mut guard) = samples.lock() {
-        guard.reserve((sample_rate as usize) * 30);
-    }
-
-    let handle = RecordingHandle {
-        thread: thread_handle,
-        should_stop,
-        samples,
-        sample_rate,
-        started_at: Instant::now(),
-    };
-
-    let mut guard = state
-        .recording
-        .lock()
-        .map_err(|e| AudioRecorderError::LockPoisoned(e.to_string()))?;
-    *guard = Some(handle);
-    Ok(())
-}
-
-/// Stop the current recording, encode the buffered samples to a WAV byte
-/// vector stashed in `state.wav_buffer`, and return summary stats.
-#[tauri::command]
-pub async fn stop_recording(
-    state: State<'_, AudioRecorderState>,
-) -> Result<StopRecordingResult, AudioRecorderError> {
-    // Take ownership of the active recording handle.
-    let handle = {
-        let mut guard = state
-            .recording
-            .lock()
-            .map_err(|e| AudioRecorderError::LockPoisoned(e.to_string()))?;
-        guard.take().ok_or(AudioRecorderError::NotRecording)?
-    };
-
-    // Signal the audio thread to pause + drop the stream.
-    handle.should_stop.store(true, Ordering::SeqCst);
-
-    // Wait for the audio thread to finish so the cpal stream is fully torn
-    // down before we read the sample buffer.
-    if let Err(e) = handle.thread.join() {
-        eprintln!("[audio-recorder] audio-recorder thread panicked: {e:?}");
-    }
-
-    // Snapshot samples and compute duration.
-    let samples = match handle.samples.lock() {
-        Ok(g) => g.clone(),
-        Err(e) => return Err(AudioRecorderError::LockPoisoned(e.to_string())),
-    };
-    let duration_ms = handle.started_at.elapsed().as_millis() as u64;
-
-    let peak = compute_peak(&samples);
-    let rms = compute_rms(&samples);
-    let sample_count = samples.len();
-
-    let wav_bytes = encode_wav(&samples, handle.sample_rate)?;
-
-    {
-        let mut guard = state
-            .wav_buffer
-            .lock()
-            .map_err(|e| AudioRecorderError::LockPoisoned(e.to_string()))?;
-        *guard = Some(wav_bytes);
-    }
-
-    eprintln!(
-        "[audio-recorder] stopped: duration_ms={duration_ms} sample_count={sample_count} peak={peak:.4} rms={rms:.4}"
-    );
-
-    Ok(StopRecordingResult {
-        duration_ms,
-        peak_energy_level: peak,
-        rms_energy_level: rms,
-        sample_count,
-    })
-}
-
-/// Enumerate input devices on the default cpal host.
-#[tauri::command]
-pub async fn list_audio_input_devices() -> Result<Vec<AudioInputDeviceInfo>, AudioRecorderError> {
-    stream::list_input_devices()
-}
-
-/// Return the default input device name, or `None` if there is no default
-/// input device.
-#[tauri::command]
-pub async fn get_default_input_device_name() -> Result<Option<String>, AudioRecorderError> {
-    Ok(stream::default_input_device_name())
-}
-
-// ─── Helpers ───────────────────────────────────────────────────────────────
+// ─── Helpers (used by `commands.rs`) ───────────────────────────────────────
 
 /// Peak-amplitude energy on the buffered samples, in [0.0, 1.0].
-fn compute_peak(samples: &[i16]) -> f32 {
+pub(crate) fn compute_peak(samples: &[i16]) -> f32 {
     samples
         .iter()
         .map(|s| (*s as f32 / i16::MAX as f32).abs())
@@ -287,7 +180,7 @@ fn compute_peak(samples: &[i16]) -> f32 {
 }
 
 /// RMS-amplitude energy on the buffered samples, in [0.0, 1.0].
-fn compute_rms(samples: &[i16]) -> f32 {
+pub(crate) fn compute_rms(samples: &[i16]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
@@ -307,7 +200,16 @@ fn compute_rms(samples: &[i16]) -> f32 {
 /// always write a mono file because the cpal callback already averages
 /// multi-channel input down to a single channel before pushing onto the
 /// shared buffer.
-fn encode_wav(samples: &[i16], sample_rate: u32) -> Result<Vec<u8>, AudioRecorderError> {
+///
+/// **Note**: synchronous; callers run this inside `tokio::task::spawn_blocking`
+/// so a 30 min / ~115 MB recording doesn't block the tokio runtime (M2 retro
+/// perf finding).
+pub(crate) fn encode_wav(
+    samples: &[i16],
+    sample_rate: u32,
+) -> Result<Vec<u8>, AudioRecorderError> {
+    use std::io::Cursor;
+
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate,
@@ -414,5 +316,36 @@ mod tests {
         // data size is 0 for an empty recording.
         let data_size = u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]);
         assert_eq!(data_size, 0);
+    }
+
+    #[test]
+    fn consume_wav_buffer_takes_ownership() {
+        let state = AudioRecorderState::new();
+        {
+            let mut guard = state.wav_buffer.lock().expect("lock");
+            *guard = Some(vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        }
+        let taken = state.consume_wav_buffer().expect("consume");
+        assert_eq!(taken, Some(vec![0xDE, 0xAD, 0xBE, 0xEF]));
+        // Second consume returns None.
+        let again = state.consume_wav_buffer().expect("consume");
+        assert_eq!(again, None);
+    }
+
+    #[test]
+    fn consume_wav_buffer_when_empty_is_none() {
+        let state = AudioRecorderState::new();
+        let taken = state.consume_wav_buffer().expect("consume");
+        assert_eq!(taken, None);
+    }
+
+    #[test]
+    fn max_wav_bytes_matches_groq_cap() {
+        // Sanity: a 16 kHz mono i16 recording at MAX_WAV_BYTES is ~13 min.
+        // Documented in module comment + 02-implementation-roadmap.md M3.
+        let max_samples = MAX_WAV_BYTES / BYTES_PER_SAMPLE;
+        let max_seconds = max_samples / 16_000;
+        assert_eq!(MAX_WAV_BYTES, 25_000_000);
+        assert!(max_seconds >= 13 * 60);
     }
 }

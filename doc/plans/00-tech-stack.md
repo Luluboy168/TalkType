@@ -1,7 +1,7 @@
 # 技術選型與理由
 
-> **狀態**：Draft v1
-> **最後更新**：2026-05-02
+> **狀態**：Draft v1（M3 chunk-1 加 `keyring` v3 + `reqwest` 0.12）
+> **最後更新**：2026-05-04
 
 ## TL;DR
 
@@ -56,7 +56,7 @@
 
 | Crate | 版本 | 用途 |
 |---|---|---|
-| `reqwest` (multipart, json) | 0.12.x | HTTP client（給 Rust-side Whisper API call） |
+| `reqwest` (multipart, json, rustls-tls) | 0.12.x | HTTP client（給 Rust-side Whisper API call、M6 LLM polish）。M3 chunk-1 已加 — 用 `rustls-tls`（無 OpenSSL C 依賴、跨平台 build 穩） |
 
 ### Clipboard
 
@@ -68,7 +68,7 @@
 
 | Crate | 版本 | 用途 | 為什麼加 |
 |---|---|---|---|
-| `keyring` | 3.x | OS Credential Vault 整合（Windows Credential Manager / macOS Keychain） | **取代 SayIt 的 plaintext settings.json 存 API key** — 重大安全改進 |
+| `keyring` | 3.x（M3 chunk-1 已加） | OS Credential Vault 整合（Windows Credential Manager / macOS Keychain / Linux secret-service） | **取代 SayIt 的 plaintext settings.json 存 API key** — 重大安全改進；per-target features wiring (windows-native / apple-native / sync-secret-service+crypto-rust) 已在 Cargo.toml 預先設定 |
 | `whisper-rs` 或 `whisper-cpp-2` | latest | whisper.cpp Rust binding | **本地 transcription** — SayIt 沒有 |
 
 > **whisper.cpp binding 候選**：
@@ -97,6 +97,13 @@
 | Crate | 版本 | 用途 |
 |---|---|---|
 | `sentry` | 0.46.x | Error / perf monitoring |
+
+### Rust dev-dependencies
+
+| Crate | 版本 | 用途 |
+|---|---|---|
+| `tempfile` | 3.x | Filesystem integration tests（M2 chunk-3 已加：audio_recorder/files.rs） |
+| `wiremock` | 0.6.x | Mock HTTP server for transcription / polish tests（M3 chunk-1 預先加；chunk-2 開始用：mock Groq `/audio/transcriptions` + `/models` endpoints） |
 
 ## 前端 dependencies
 
