@@ -1,6 +1,6 @@
 # 系統架構
 
-> **狀態**：Draft v1（M1 + M2 + M3 chunk-1 IPC contract 已落地、M3 + M6 plan 經 challenger refine）
+> **狀態**：Draft v1（M1 + M2 + M3 IPC contract 已落地、M6 plan 經 challenger refine）
 > **最後更新**：2026-05-04
 
 ## 高層架構圖
