@@ -141,3 +141,37 @@
 5. `doc/plans/03-rust-modules.md` `hotkey_listener` + `clipboard_paste` sections
 6. `doc/plans/04-frontend-structure.md` `useVoiceFlowStore` 設計
 7. `doc/reference/sayit-improvements.md`（SayIt 的 hotkey listener 1566 行 + paste 流程踩過的雷）
+
+## Post-merge addendum（PR #6 merged 2026-05-04）
+
+PR #6 過 CI、user merge 進 main。完整 commit chain：
+
+| Commit | 內容 |
+|---|---|
+| `bf2ab31` | chore(m3): mark milestone start |
+| `bc81a91` | feat(m3): wrap up M2 retro before cloud transcription work |
+| `c7efb2c` | feat(m3): credentials keyring module + Settings API key UI |
+| `541a930` | feat(m3): transcription dispatcher + Groq cloud HTTP client |
+| `2258cdf` | feat(m3): test_provider_connection + Settings test button + dev test transcribe |
+| `718977b` | docs(m3): mark milestone done, session log + proxy README + screenshots |
+| `f53ac77` | fix(m3): hide native password reveal + add masked key preview |
+| `0f09bbc` | docs: tighten UI verification SOP — interactive states, not just initial shape |
+| `b2378f5` | Merge PR #6 |
+
+### Polish round（user manual dogfood 後）
+1. **雙 password reveal icon bug**：input type="password" 時 WebView2 native `::-ms-reveal` 跟我們的 Eye/EyeOff 重疊。修：scoped `<style>` 加 `input[type=password]::-ms-reveal { display: none }`（後續可考慮搬 global CSS 一勞永逸）。
+2. **Masked key preview**：user 想知道目前儲存的是哪把 key、不只「✅ 已儲存」。新 `get_credential_preview` Tauri command、Rust mask 「first 7 + … + last 4」（"gsk_aBc…XyZ1"）、full key 不過 IPC、Q1 invariant 維持。98 cargo tests pass（+4 mask tests Unicode-safe）。
+
+### CLAUDE.md SOP 升級
+M3 chunk 3 漏掉雙眼睛 bug 是因為 Playwright pass 只截「初始空白頁」、沒模擬 user 輸入。User 要求記下：「未來不要再只看 shape、要看 interactive states」。
+
+→ CLAUDE.md item #4 改寫為 7 步 SOP（initial → fill → click → trigger error → 全部 Read 確認）。Auto-memory `feedback_ui_screenshots.md` 同步更新。**這條規則已生效、所有未來 chunk 的 UI 驗證都要照做**。
+
+### M4 開工前必做（給下個 session Claude）
+- `git fetch origin && git checkout -b claude/m4-hotkey-paste origin/main`（**不要**繼續用本 stale branch）
+- 同 message 平行 dispatch plan-time challenger（CLAUDE.md item #5）讀 roadmap M4 + SayIt hotkey 1566 行教訓
+- 提醒 user：去 Groq console rotate API key（chat 出現過 = 視為已洩漏；目前在 keyring 的那把要砍、生新）
+
+### 不打算做的事（明確記下避免下次走回頭路）
+- ❌ 把 Groq key 放進 `.env.local` 給 automated tests 用：wiremock 已涵蓋 31 個 corner cases、real-Groq smoke 是 user manual job、加 .env 是多一個外洩面、零收益
+- ❌ M3 retro challenger：plan-time challenger + Q1-Q5 + 4 chunk reviewers 已涵蓋大部分 latent issues、retro ROI 對 M3 太低、跳過
