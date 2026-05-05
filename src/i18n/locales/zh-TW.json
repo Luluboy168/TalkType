@@ -4,8 +4,14 @@
     "version_label": "版本"
   },
   "hud": {
-    "title": "TalkType HUD",
-    "pongCount": "pong: {count}"
+    "aria": {
+      "recording": "錄音中",
+      "transcribing": "轉錄中",
+      "success": "完成",
+      "error": "錯誤：{message}"
+    },
+    "transcribing": "轉錄中…",
+    "success": "完成"
   },
   "sidebar": {
     "dashboard": "儀表板",

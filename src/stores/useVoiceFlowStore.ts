@@ -445,6 +445,27 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
     };
   }
 
+  /**
+   * Dev-only state mutator (M5 chunk 2). Allows `pnpm dev` (vite-only mode,
+   * no Tauri runtime) to drive the HUD through its 4 visual states for
+   * Playwright screenshot captures, without going through the hotkey →
+   * Rust pipeline (which can't run without Tauri).
+   *
+   * Tree-shaken from production by the `import.meta.env.DEV` guard at the
+   * call site (see `src/main.ts` `__hudDev.setStatus`). Even if a malicious
+   * caller invokes it in prod the worst outcome is a misrendered HUD —
+   * the function only writes the local state machine refs, no Rust IPC.
+   */
+  function __devSetStatus(
+    next: VoiceFlowStatus,
+    msg: string,
+    startedAtMs: number | null,
+  ): void {
+    status.value = next;
+    message.value = msg;
+    recordingStartedAtMs.value = startedAtMs;
+  }
+
   return {
     // Read-only refs for consumers (HUD components, Dashboard sidebar).
     status: readonly(status),
@@ -460,5 +481,7 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
     handleStart,
     handleStop,
     handleCancel,
+    // Dev-only: see fn doc above.
+    __devSetStatus,
   };
 });

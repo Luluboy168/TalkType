@@ -16,6 +16,66 @@ import App from "./App.vue";
 import { createAppI18n } from "./i18n";
 import { useVoiceFlowStore } from "./stores/useVoiceFlowStore";
 
+// M5 chunk 2 vite-only shim — when running `pnpm dev` (no Tauri runtime),
+// `window.__TAURI_INTERNALS__` is undefined so any `invoke()` / `listen()`
+// throws `Cannot read properties of undefined (reading 'transformCallback')`.
+// We inject a no-op shim so the HUD mounts cleanly for Playwright screenshot
+// captures. Tree-shaken from production by `import.meta.env.DEV` —
+// production never ships this branch.
+if (import.meta.env.DEV) {
+  const tauriWin = window as unknown as {
+    __TAURI_INTERNALS__?: unknown;
+  };
+  if (!tauriWin.__TAURI_INTERNALS__) {
+    let nextCallbackId = 0;
+    tauriWin.__TAURI_INTERNALS__ = {
+      transformCallback: <T>(_cb: (msg: T) => void): number => {
+        // Real Tauri stores cb in window so the IPC bridge can invoke it
+        // via id — for vite shim we just return an ID (never used).
+        nextCallbackId += 1;
+        return nextCallbackId;
+      },
+      invoke: async (cmd: string): Promise<void> => {
+        // Best-effort no-op so positioning / capture / start_recording etc.
+        // resolve in vite mode without crashing the store.
+        console.debug("[hud-vite-shim] invoke", cmd);
+        return undefined;
+      },
+      ipc: () => {
+        /* no-op */
+      },
+      metadata: {
+        currentWindow: { label: "main" },
+        currentWebview: { label: "main", windowLabel: "main" },
+      },
+    };
+  }
+
+  // M5 chunk 2 reduced-motion screenshot helper — Playwright sets
+  // sessionStorage('m5_reduced_motion'='1') then reloads; we intercept
+  // matchMedia BEFORE Vue mounts so onMounted reads matches=true.
+  // Toggle off by clearing the key + reload.
+  if (sessionStorage.getItem("m5_reduced_motion") === "1") {
+    const origMatchMedia = window.matchMedia.bind(window);
+    window.matchMedia = (query: string): MediaQueryList => {
+      if (query.includes("prefers-reduced-motion")) {
+        return {
+          matches: true,
+          media: query,
+          onchange: null,
+          addEventListener: (() => {}) as MediaQueryList["addEventListener"],
+          removeEventListener:
+            (() => {}) as MediaQueryList["removeEventListener"],
+          addListener: () => {},
+          removeListener: () => {},
+          dispatchEvent: () => false,
+        } as MediaQueryList;
+      }
+      return origMatchMedia(query);
+    };
+  }
+}
+
 // Tag the body so the global CSS can opt this window out of the solid
 // background (HUD is transparent through to the desktop).
 document.body.setAttribute("data-window", "hud");
@@ -50,3 +110,37 @@ voiceFlow
     console.error("[hud] voice flow init failed", err);
     // Phase 1: log only; M5 doesn't render an init-failure state. M9 polish.
   });
+
+// M5 chunk 2 dev hook — exposes a small mutator on window so vite-only
+// mode (`pnpm dev`, no Tauri runtime) can drive the HUD through its 4
+// visual states from Playwright / devtools for screenshot captures.
+// Tree-shaken from production builds via `import.meta.env.DEV`.
+//
+// Usage from devtools / browser_evaluate:
+//   window.__hudDev.setStatus('recording', { startedAtMs: Date.now() })
+//   window.__hudDev.setStatus('error', { message: 'API key 無效' })
+//   window.__hudDev.setStatus('idle')
+//
+// Implementation: delegates to `__devSetStatus` on the store, which writes
+// the inner writable refs directly (the public refs are `readonly()`-wrapped).
+if (import.meta.env.DEV) {
+  (
+    window as unknown as {
+      __hudDev?: {
+        setStatus: (
+          status: "idle" | "recording" | "transcribing" | "success" | "error",
+          opts?: { message?: string; startedAtMs?: number | null },
+        ) => void;
+      };
+    }
+  ).__hudDev = {
+    setStatus(status, opts = {}) {
+      voiceFlow.__devSetStatus(
+        status,
+        opts.message ?? "",
+        opts.startedAtMs ??
+          (status === "recording" ? Date.now() : null),
+      );
+    },
+  };
+}

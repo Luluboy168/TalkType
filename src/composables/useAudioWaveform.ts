@@ -31,6 +31,12 @@ export function useAudioWaveform() {
   const targetLevels: number[] = new Array<number>(BAR_COUNT).fill(0);
   let raf = 0;
   let unlisten: (() => void) | null = null;
+  // P1-3 (M5 chunk 2): rapid hotkey press could mount → start() in flight
+  // → unmount before the await listenToEvent resolves → stop() finds no
+  // unlisten yet → second mount races and creates a duplicate listener.
+  // The `starting` flag short-circuits re-entry while the first start is
+  // still awaiting registration.
+  let starting = false;
 
   function tick() {
     const next = smoothedLevels.value.slice();
@@ -42,17 +48,22 @@ export function useAudioWaveform() {
   }
 
   async function start() {
-    if (unlisten) return;
-    unlisten = await listenToEvent<WaveformPayload>(
-      AUDIO_WAVEFORM,
-      (event) => {
-        const { levels } = event.payload;
-        for (let i = 0; i < BAR_COUNT; i++) {
-          targetLevels[i] = levels[i] ?? 0;
-        }
-      },
-    );
-    raf = requestAnimationFrame(tick);
+    if (unlisten || starting) return;
+    starting = true;
+    try {
+      unlisten = await listenToEvent<WaveformPayload>(
+        AUDIO_WAVEFORM,
+        (event) => {
+          const { levels } = event.payload;
+          for (let i = 0; i < BAR_COUNT; i++) {
+            targetLevels[i] = levels[i] ?? 0;
+          }
+        },
+      );
+      raf = requestAnimationFrame(tick);
+    } finally {
+      starting = false;
+    }
   }
 
   function stop() {
