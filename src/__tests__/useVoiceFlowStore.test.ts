@@ -416,6 +416,9 @@ describe("useVoiceFlowStore", () => {
     await store.handleStart();
     expect(store.status).toBe("error");
     expect(store.message).toContain("請手動 Ctrl+V");
+    // Retro challenger P1: hint must be PREPENDED so it survives the HUD
+    // bubble's text-overflow: ellipsis truncation (chunk 2 max-width 280px).
+    expect(store.message.startsWith("請手動 Ctrl+V")).toBe(true);
   });
 
   it("formatError matches legacy 'Focus restore failed' string too (defensive)", async () => {
@@ -428,6 +431,9 @@ describe("useVoiceFlowStore", () => {
     await store.handleStart();
     expect(store.status).toBe("error");
     expect(store.message).toContain("請手動 Ctrl+V");
+    // Retro challenger P1: hint must be PREPENDED so it survives the HUD
+    // bubble's text-overflow: ellipsis truncation (chunk 2 max-width 280px).
+    expect(store.message.startsWith("請手動 Ctrl+V")).toBe(true);
   });
 
   it("formatError matches the Rust enum variant name 'FocusRestoreFailed' too", async () => {
@@ -438,5 +444,8 @@ describe("useVoiceFlowStore", () => {
     await store.handleStart();
     expect(store.status).toBe("error");
     expect(store.message).toContain("請手動 Ctrl+V");
+    // Retro challenger P1: hint must be PREPENDED so it survives the HUD
+    // bubble's text-overflow: ellipsis truncation (chunk 2 max-width 280px).
+    expect(store.message.startsWith("請手動 Ctrl+V")).toBe(true);
   });
 });

@@ -339,12 +339,18 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
     // (see src-tauri/src/plugins/clipboard_paste/mod.rs:96). Chunk 1 reviewer
     // (P0) caught that the original spec/plan pattern `"Focus restore failed"`
     // never matched the real Rust output.
+    //
+    // **Retro challenger P1 fix (M5 ship gate)**: hint is PREPENDED, not
+    // appended. The HUD bubble has `text-overflow: ellipsis; max-width: 280px`
+    // (chunk 2 P1-1) — appending puts the actionable hint at the truncated
+    // tail where user can't see it. Prepending makes the hint always visible;
+    // the technical Rust detail is what gets ellipsed instead.
     if (
       raw.startsWith("Failed to restore focus") ||
       raw.startsWith("Focus restore failed") ||
       raw.includes("FocusRestoreFailed")
     ) {
-      return `${raw}（請手動 Ctrl+V）`;
+      return `請手動 Ctrl+V — ${raw}`;
     }
 
     return raw;
