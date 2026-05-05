@@ -107,49 +107,52 @@ describe("useVoiceFlowStore", () => {
     });
   });
 
-  it("handleStart is a no-op while transcribing (would race the busy guard)", async () => {
-    // Transcribing is the only non-recording state we still block — Rust's
-    // transcribe_busy AtomicBool would reject the next transcribe anyway,
-    // so starting a new recording while the previous transcribe is in
-    // flight just queues a doomed call.
+  it("handleStart during transcribing starts a new recording in parallel (rapid press v2)", async () => {
+    // M4 acceptance fix v2: previous version blocked handleStart during
+    // transcribing, but that meant pressing within ~1s of release (still
+    // in the Groq round-trip window) silently no-op'd. Now we allow start;
+    // the old transcribe + paste finish in the background via the paste
+    // serialization chain.
     const store = useVoiceFlowStore();
 
     // Get into recording.
-    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
-    mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window 1
+    mockInvoke.mockResolvedValueOnce(undefined); // start_recording 1
     await store.handleStart();
     expect(store.status).toBe("recording");
 
-    // Stop and let the transcribe_audio call hang so we land in
-    // "transcribing" without resolving.
-    let resolveTranscribe: (value: unknown) => void = () => {};
-    const transcribePromise = new Promise((resolve) => {
-      resolveTranscribe = resolve;
+    // Stop, let transcribe_audio hang so we stay in "transcribing".
+    let resolveTranscribe1: (value: unknown) => void = () => {};
+    const transcribe1 = new Promise((resolve) => {
+      resolveTranscribe1 = resolve;
     });
-    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
-    mockInvoke.mockReturnValueOnce(transcribePromise); // transcribe_audio (pending)
-
+    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording 1
+    mockInvoke.mockReturnValueOnce(transcribe1); // transcribe_audio 1 (pending)
     const stopPromise = store.handleStop();
-
-    // Yield once so handleStop reaches the transcribing transition.
     await Promise.resolve();
     await Promise.resolve();
     expect(store.status).toBe("transcribing");
 
-    // Press while transcribing → no-op.
-    mockInvoke.mockClear();
+    // Press during transcribing — should start a new recording, NOT
+    // no-op like the previous (overly-conservative) guard did.
+    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window 2
+    mockInvoke.mockResolvedValueOnce(undefined); // start_recording 2
     await store.handleStart();
-    expect(mockInvoke).not.toHaveBeenCalled();
-    expect(store.status).toBe("transcribing");
+    expect(store.status).toBe("recording"); // session 2 took over
 
-    // Resolve the hanging transcribe + paste so the test cleans up.
-    mockInvoke.mockResolvedValueOnce(undefined); // paste_text
-    resolveTranscribe({
-      rawText: "ok",
+    // Now resolve the OLD transcribe — its paste runs through the chain
+    // and its terminal transitions should NOT clobber session 2's
+    // "recording" status.
+    mockInvoke.mockResolvedValueOnce(undefined); // paste_text 1
+    resolveTranscribe1({
+      rawText: "first",
       transcriptionDurationMs: 50,
       noSpeechProbability: null,
     });
     await stopPromise;
+    // Old session's terminal transition is gated by currentSession check,
+    // so status stays "recording" for session 2.
+    expect(store.status).toBe("recording");
   });
 
   it("handleStop from recording transitions through transcribing → success → idle and pastes raw text", async () => {

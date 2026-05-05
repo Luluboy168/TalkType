@@ -13,12 +13,22 @@
 // `local::transcribe_local_internal` while keeping the same
 // `TranscriptionResult` shape so the UI doesn't branch.
 //
-// **Concurrency guard**: `transcribe_busy: Arc<AtomicBool>` rejects
-// overlapping calls with `TranscriptionError::Busy`. Acquired via
-// `swap(true, AcqRel)` so two simultaneous frontend invokes can't both
-// succeed; released via a RAII `BusyGuard` so any error path also resets
-// the flag (otherwise a single panic would leave the app stuck in "busy"
-// mode until restart).
+// **Concurrency**: parallel transcribes are allowed so rapid voice typing
+// works — user presses, releases, then presses again before the previous
+// transcribe's network round-trip completes. Each invoke spawns its own
+// tokio task; the WAV buffer is consumed at the start of `transcribe_
+// cloud_internal` (`Mutex::take`) so two transcribes never race on the
+// same bytes. Earlier M3 design used a `transcribe_busy` AtomicBool guard
+// that rejected overlapping calls with `TranscriptionError::Busy`; the
+// guard was removed in M4 acceptance because it made rapid press feel
+// broken from the user's POV. The `Busy` enum variant stays defined for
+// the retry-policy classifier and any future explicit serialization.
+//
+// **Paste serialization**: the FRONTEND serializes `paste_text` calls via
+// a Promise chain in `useVoiceFlowStore` so two simultaneous transcribe
+// completions can't race on the OS clipboard. Without that lock, two
+// concurrent `clipboard.set_text` + `SendInput Ctrl+V` pipelines can
+// trample each other's clipboard contents before either's SendInput fires.
 //
 // **Event broadcast**: on success we `app.emit("transcription:completed",
 // result)` so both HUD and Dashboard windows can react. The HUD pastes the
@@ -32,8 +42,6 @@ mod parser;
 pub use error::TranscriptionError;
 pub use health::test_provider_connection;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -45,11 +53,11 @@ use crate::plugins::audio_recorder::AudioRecorderState;
 ///
 /// Single shared `reqwest::Client` so we reuse the connection pool across
 /// transcribe calls (TLS handshake reuse alone saves ~150 ms on the first
-/// retry of a session). Single `AtomicBool` busy guard so two overlapping
-/// transcriptions can't race on the WAV buffer or the Groq quota.
+/// retry of a session). Parallel transcribes are allowed; the WAV buffer
+/// is consumed at each `transcribe_cloud_internal` start so they don't
+/// race on bytes.
 pub struct TranscriptionState {
     pub(crate) client: reqwest::Client,
-    pub(crate) transcribe_busy: Arc<AtomicBool>,
 }
 
 impl TranscriptionState {
@@ -63,10 +71,7 @@ impl TranscriptionState {
             .user_agent(format!("TalkType/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| TranscriptionError::NetworkOther(format!("client build: {e}")))?;
-        Ok(Self {
-            client,
-            transcribe_busy: Arc::new(AtomicBool::new(false)),
-        })
+        Ok(Self { client })
     }
 }
 
@@ -84,18 +89,20 @@ pub struct TranscriptionResult {
 /// Frontend-facing transcription command.
 ///
 /// M3 hardcodes Groq cloud. M7 will read `whisper_provider` from
-/// `SettingsState` once that lives in Rust (`SettingsState` arrives in M8).
+/// `SettingsState` once local whisper.cpp is wired in.
+///
+/// Parallel invokes are allowed (M4 acceptance fix) — the WAV buffer is
+/// consumed at the start of `transcribe_cloud_internal` so two transcribes
+/// never race on the same bytes. Frontend serializes the resulting paste
+/// calls via a Promise chain in `useVoiceFlowStore` so the OS clipboard
+/// isn't trampled when two transcribes complete close together.
 ///
 /// Steps:
 ///
-///   1. Acquire `transcribe_busy` exclusively (`swap(true, AcqRel)`) — if
-///      another transcribe is in flight, return `Busy` immediately.
-///   2. Bind a `BusyGuard` so any subsequent error path releases the flag
-///      via `Drop`.
-///   3. Call into `cloud::transcribe_cloud_internal` which handles WAV
+///   1. Call into `cloud::transcribe_cloud_internal` which handles WAV
 ///      validation, keyring lookup, multipart POST, retry, and parsing.
-///   4. Emit `transcription:completed` for both windows.
-///   5. Return the `TranscriptionResult` to the original `invoke<T>()` call.
+///   2. Emit `transcription:completed` for both windows.
+///   3. Return the `TranscriptionResult` to the original `invoke<T>()` call.
 #[tauri::command]
 pub async fn transcribe_audio(
     app: AppHandle,
@@ -103,15 +110,6 @@ pub async fn transcribe_audio(
     audio_state: State<'_, AudioRecorderState>,
     vocabulary: Option<Vec<String>>,
 ) -> Result<TranscriptionResult, TranscriptionError> {
-    // Guard against concurrent invokes. swap returns the PREVIOUS value;
-    // if it was already true, someone else won the race — bail.
-    let busy = transcription_state.transcribe_busy.clone();
-    if busy.swap(true, Ordering::AcqRel) {
-        return Err(TranscriptionError::Busy);
-    }
-    // RAII guard — Drop fires whether the call returns Ok / Err / panics.
-    let _guard = BusyGuard(busy);
-
     // M3: Groq is the only cloud provider. M7 dispatches based on settings.
     let result =
         cloud::transcribe_cloud_internal(&transcription_state.client, &audio_state, vocabulary)
@@ -128,56 +126,22 @@ pub async fn transcribe_audio(
     Ok(result)
 }
 
-/// RAII drop-guard that flips `transcribe_busy` back to `false` whatever
-/// happens. Holding `Arc<AtomicBool>` instead of `&AtomicBool` so the guard
-/// outlives the `State` reference's lifetime within the command body.
-struct BusyGuard(Arc<AtomicBool>);
-
-impl Drop for BusyGuard {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    // Dispatcher-level tests focus on the BusyGuard and state construction.
+    // Dispatcher-level tests focus on state construction + result shape.
     // The Groq HTTP layer has its own wiremock-based tests in cloud.rs.
     // End-to-end transcribe_audio testing requires a Tauri AppHandle which
     // is overkill for unit tests; chunk 3's manual smoke covers it.
+    //
+    // Earlier M3 design had `BusyGuard` + `transcribe_busy` AtomicBool tests
+    // here. Those were removed in M4 acceptance because the busy guard was
+    // dropped to allow rapid voice typing — see module-level comment.
 
     use super::*;
 
     #[test]
-    fn transcription_state_builds_with_default_busy_false() {
-        let state = TranscriptionState::new().expect("build");
-        assert!(!state.transcribe_busy.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn busy_guard_releases_on_drop() {
-        let flag = Arc::new(AtomicBool::new(true));
-        {
-            let _g = BusyGuard(flag.clone());
-        }
-        assert!(!flag.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn busy_guard_releases_on_panic_unwind() {
-        // Confirm Drop fires even when the surrounding code panics.
-        let flag = Arc::new(AtomicBool::new(false));
-        let outer = flag.clone();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            outer.store(true, Ordering::Release);
-            let _g = BusyGuard(outer.clone());
-            panic!("simulated failure");
-        }));
-        assert!(result.is_err());
-        assert!(
-            !flag.load(Ordering::Acquire),
-            "guard should reset on unwind"
-        );
+    fn transcription_state_builds_successfully() {
+        let _state = TranscriptionState::new().expect("build");
     }
 
     #[test]

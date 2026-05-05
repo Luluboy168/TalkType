@@ -67,6 +67,33 @@ const SUCCESS_LINGER_MS = 1000;
 /** How long the `error` state stays visible before transitioning back to idle. */
 const ERROR_LINGER_MS = 3000;
 
+/**
+ * Module-level paste serialization (M4 acceptance fix). Each `paste_text`
+ * invocation appends to this Promise chain so concurrent transcribe
+ * completions can't trample the OS clipboard. Without this lock, two
+ * `paste_text` calls running close together would both spawn_blocking,
+ * both call `arboard::Clipboard::set_text`, and the later set would
+ * clobber the earlier one BEFORE its `SendInput Ctrl+V` fires — net
+ * result: only the last text gets pasted, twice.
+ *
+ * Errors are swallowed off the chain so a single failed paste doesn't
+ * poison subsequent ones.
+ */
+let pasteChain: Promise<void> = Promise.resolve();
+
+async function pasteTextSerial(text: string): Promise<void> {
+  const previous = pasteChain;
+  pasteChain = (async () => {
+    try {
+      await previous;
+    } catch {
+      // ignore upstream paste failure — they handle their own error path
+    }
+    await invoke<void>("paste_text", { text });
+  })();
+  await pasteChain;
+}
+
 export const useVoiceFlowStore = defineStore("voiceFlow", () => {
   /** Logical voice-flow state. Read-only outside the store; mutated only via
    * `transitionTo`. */
@@ -79,6 +106,18 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
    * tick rate (RAF, setInterval, …). */
   const recordingStartedAtMs = ref<number | null>(null);
 
+  /**
+   * Monotonic counter incremented on each `handleStart`. Each `handleStop`
+   * captures the active session and only writes terminal transitions
+   * (success / idle / error) if its session is still current. This stops
+   * a stale handleStop (e.g. transcribe 1 finishing) from clobbering a
+   * fresh handleStart's "recording" status when the user does rapid press
+   * during transcribing.
+   *
+   * Module-private: not exposed in the store's public surface.
+   */
+  let currentSession = 0;
+
   /** Hotkey-down → start the voice flow. Captures the foreground HWND FIRST
    * so the later paste knows which window to send Ctrl+V to. The capture
    * has to happen before we change focus — the HUD has `WS_EX_NOACTIVATE`
@@ -90,38 +129,51 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
    *   2. start_recording (deviceName: null = cpal default)
    *   3. transition to "recording"
    *
-   * **Guard policy** (M4 acceptance fix): allow start from `idle | success
-   * | error`, block from `recording | transcribing`. Old code only allowed
-   * `idle`, which made rapid press feel broken — after release the flow
-   * goes through `transcribing → success (1s linger) → idle`, a 2-3s
-   * window where a fresh press got silently dropped. The relaxed guard
-   * lets the user immediately re-trigger as soon as paste completes
-   * (success state) or after an error auto-revert (error state). We still
-   * block `recording` (already going) and `transcribing` (Rust's
-   * transcribe_busy guard would reject the next transcribe anyway, so
-   * starting a new recording would just queue a doomed call).
+   * **Guard policy** (M4 acceptance fix v2): allow start from any state
+   * EXCEPT `recording` (already capturing — would conflict with
+   * audio_recorder's single-recording invariant). The earlier conservative
+   * "block transcribing too" guard was too strict — it dropped fresh
+   * presses during the 0.5-2s Groq round trip, which made rapid voice
+   * typing feel broken. Now: a fresh press during transcribing starts a
+   * new recording in parallel; the old transcribe + paste finish in the
+   * background and chain through `pasteTextSerial`.
+   *
+   * Cross-cutting concerns:
+   *   * Rust transcribe_busy guard was REMOVED — parallel transcribes are
+   *     allowed; WAV buffer is consumed at each transcribe's start so
+   *     there's no buffer race.
+   *   * Frontend `pasteTextSerial` queues paste_text invocations so two
+   *     simultaneous completions don't fight for the OS clipboard.
+   *   * `currentSession` counter prevents stale handleStop's terminal
+   *     transitions from clobbering the active recording's status.
    */
   async function handleStart(): Promise<void> {
-    if (status.value === "recording" || status.value === "transcribing") {
-      return;
-    }
+    if (status.value === "recording") return;
+    const mySession = ++currentSession;
     try {
       await invoke<void>("capture_target_window");
       await invoke<void>("start_recording", { deviceName: null });
+      // If a newer handleStart raced ahead while we awaited Tauri commands,
+      // bail without writing status — the newer session owns it.
+      if (mySession !== currentSession) return;
       recordingStartedAtMs.value = Date.now();
       transitionTo("recording", "");
     } catch (err) {
-      // start_recording can fail with `Busy` if the recorder is already
-      // running. Either way we surface as error and let the auto-revert
-      // timer reset to idle.
-      handleError(err);
+      if (mySession === currentSession) handleError(err);
     }
   }
 
   /** Hotkey-up → stop recording → transcribe → paste. Phase 1 path only:
-   * raw Whisper text, no LLM polish (M6 owns), no history persist (M8). */
+   * raw Whisper text, no LLM polish (M6 owns), no history persist (M8).
+   *
+   * Stop is **session-scoped**: if a newer handleStart has run, our
+   * terminal transitions (transcribing/success/idle) skip so we don't
+   * clobber the new recording's status. Transcribe + paste still run in
+   * background so the user gets their audio transcribed + pasted; only
+   * the visible state machine is gated. */
   async function handleStop(): Promise<void> {
     if (status.value !== "recording") return;
+    const mySession = currentSession;
     transitionTo("transcribing", "");
     try {
       await invoke<void>("stop_recording");
@@ -131,15 +183,25 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
         // so the Rust `Option<Vec<String>>` deserializes to `None`.
         vocabulary: undefined,
       });
-      await invoke<void>("paste_text", { text: result.rawText });
-      transitionTo("success", "");
-      window.setTimeout(() => {
-        if (status.value === "success") transitionTo("idle", "");
-      }, SUCCESS_LINGER_MS);
+      // Paste runs through the module-level chain so concurrent transcribe
+      // completions don't trample the OS clipboard.
+      await pasteTextSerial(result.rawText);
+      // Only emit terminal transitions if WE are still the latest session —
+      // otherwise the user has started a new recording and we'd clobber it.
+      if (mySession === currentSession) {
+        transitionTo("success", "");
+        window.setTimeout(() => {
+          if (status.value === "success" && mySession === currentSession) {
+            transitionTo("idle", "");
+          }
+        }, SUCCESS_LINGER_MS);
+      }
     } catch (err) {
-      handleError(err);
+      if (mySession === currentSession) handleError(err);
     } finally {
-      recordingStartedAtMs.value = null;
+      // Only clear the timestamp if our session is still active —
+      // otherwise we'd null out a newer recording's start time.
+      if (mySession === currentSession) recordingStartedAtMs.value = null;
     }
   }
 
