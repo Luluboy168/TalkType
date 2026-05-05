@@ -1,7 +1,7 @@
 # 2026-05-05 — M4 Global Hotkey + Paste
 
 > **Session topic**：完成 Phase 1 Milestone 4（global hotkey + Windows paste pipeline）— `SetWindowsHookExW(WH_KEYBOARD_LL)` 命名 thread + atomic-only hot path + AltGr 抑制 + double-tap detection；`arboard` STA + `spawn_blocking` + 7-step paste pipeline（modifier residue release + IME composition complete + `SetForegroundWindow` 失敗 fallback emit）；HUD `WS_EX_NOACTIVATE`；Rust-owned `Settings` v1 schema（`tauri-plugin-store` backend、JSON 持久化、自動 hot-swap hotkey config）；HUD voice flow Pinia store；shadcn-vue Settings UI hotkey section + 13-condition manual acceptance SOP。
-> **Outcome**：✅ M4 implementation done、5 chunks 落地（chunk 0 deps + chunks 1+2 平行 dispatch + chunk 3 settings + chunk 4 UI）+ 2 reviewer passes（chunks 1+2 reviewer 找 4 P1 修了 #1+#3、其餘 #2+#4 落 IDEAS；chunk 3 reviewer 0 P0 / 0 P1）+ paste.rs 拆 6 sub-modules（reviewer P1 #4）、**154 cargo tests + 14 vitest** pass、static checks all green、6 vite-shape screenshots interactive states 驗證、待 user 跑 [`docs/m4-acceptance.md`](../../docs/m4-acceptance.md) 13 條 manual acceptance（real Tauri runtime + OS-level keystroke 測試）。
+> **Outcome**：✅ M4 done、5 chunks 落地（chunk 0 deps + chunks 1+2 平行 dispatch + chunk 3 settings + chunk 4 UI）+ 2 reviewer passes（chunks 1+2 reviewer 找 4 P1 修了 #1+#3、其餘 #2+#4 落 IDEAS；chunk 3 reviewer 0 P0 / 0 P1）+ paste.rs 拆 6 sub-modules（reviewer P1 #4）+ user dogfood 找 2 P0 acceptance bugs 修了（issue 1 keystroke suppression + issue 2 rapid press v2 parallel transcribes + session counter + paste serialization）、**157 cargo tests + 16 vitest** pass、user acceptance 通過。
 
 ## What changed
 
@@ -147,9 +147,62 @@
 
 ## 下個 session 開始時建議讀
 
-1. `.claude/PROGRESS.md`（本 memory entry point — M4 implementation done 待 user acceptance、M5 將是下個 milestone）
-2. 本檔（M4 session log）— 特別是「Follow-ups for M5」段
+1. `.claude/PROGRESS.md`（本 memory entry point — M4 done acceptance 通過、M5 將是下個 milestone）
+2. 本檔（M4 session log）— 特別是「Follow-ups for M5」段 + 下面「## User dogfood acceptance addendum」
 3. `.claude/IDEAS.md` 「## M4 plan-time challenger P2」+「## M4 chunks 1+2 reviewer findings」+「## M4 chunk 3 reviewer findings」三 sections（共 13 項目給 M5 / M9 / Phase 2 拾起）
 4. `doc/plans/02-implementation-roadmap.md` M5 section（HUD overlay 完成、4 visual states、accessibility 對 SayIt 改進）
 5. `doc/plans/04-frontend-structure.md` `## components/` HudOverlay / HudWaveform / HudStateIcon section
 6. `doc/reference/sayit-improvements.md` 「## 3. UX / 產品 concerns」「Accessibility 基本上不存在」段（M5 必修）
+
+## User dogfood acceptance addendum（2026-05-05 晚）
+
+> 13 條 manual acceptance + 自由 dogfood 發現 2 個 P0、修了 2 commit 後 user 確認 acceptance 通過。M4 真正 done 是這個 addendum 的時間點。
+
+### Issue 1 — Right Alt 與 target apps native shortcut 衝突（user requested as P0）
+
+**現象**：Notepad / Word 都把 Right Alt 當 menu activator、user 按熱鍵時也會觸發目標 app 的選單。
+
+**Root cause**：`hook_proc` 永遠 `CallNextHookEx` 把 keystroke 傳給 OS、target app 還能收到 Right Alt。M4 implementation 設計就是 observational not exclusive。User 明確要求改成 exclusive（按下 trigger key 後 target app 完全收不到）。
+
+**Fix**（commit `8e8e3bf`）：加 `HotkeySharedState::should_suppress(KeyEvent) -> bool`、hook_proc 在它 returns true 時 `return LRESULT(1)` 吃掉 keystroke。Decision tree:
+- AltGr active（LCONTROL + RMENU）→ pass through（保 EU 鍵盤輸入 € @ #）
+- ESC → pass through（target app 還能收到 ESC 做別的事）
+- vk == trigger_key → suppress（regardless of mode 或 down/up，對稱 suppress 防止 stray modifier-up event）
+- 其他 → pass through
+
+5 個新 unit tests 驗證 truth table。
+
+### Issue 2 — Hold mode 快速連按沒反應（user dogfood P0）
+
+**現象**：放開後 ~1 秒內再按、沒 trigger 新錄音（user 等的時間是 Groq HTTP round trip）。
+
+**Root cause v1 misdiagnosis**：以為 1s success linger 是 culprit、commit `8e8e3bf` relax handleStart guard 只擋 `recording | transcribing`、success / error / idle 都允許開新錄音。User re-test 後說「還是不行」— 因為 ~1s 內 status 是 `transcribing`（等 Groq 回應）、被擋住。
+
+**Real root cause**：transcribing window 0.5-2s 是 Groq HTTP round trip + Rust `transcribe_busy` AtomicBool guard reject 並行 transcribe。
+
+**Fix v2**（commit `14198fb`）：4 部份改造：
+1. **Rust 移除 `transcribe_busy` guard**：平行 transcribe 在 architecture 上 OK — WAV buffer 在每次 `transcribe_cloud_internal` 開頭被 `Mutex::take()` consume、不會 race。`TranscriptionError::Busy` enum variant 留著供 retry 分類器用、但不再 return。`BusyGuard` struct + 2 個 panic-unwind tests 移除（-2 tests）。
+2. **JS handleStart 只擋 `recording`**：唯一還擋的、因為會撞 audio_recorder single-recording invariant。任何其他狀態都允許開新錄音。
+3. **Session counter**：每次 handleStart 增 `currentSession`；handleStop 開頭 capture mySession、終端 transitions（success / idle / error）只在 `mySession === currentSession` 時寫入。防舊 handleStop 完成時把新錄音的 `recording` status clobber 成 `transcribing/success`。
+4. **paste serialization**：module-level `pasteChain: Promise<void>` 串行所有 `paste_text` 呼叫。沒這 lock、兩個 transcribe 同時完成時會兩個 spawn_blocking 同時 set clipboard、後者覆蓋前者後兩個 SendInput 都 paste 後者文字 → user 失去前一段。
+
+對應新 vitest「handleStart during transcribing starts a new recording in parallel」exercise session-takeover path、舊「no-op while transcribing」test 替換掉。
+
+### Acceptance verdict（2026-05-05 晚）
+
+- ✅ Issue 1：Right Alt 在所有 target app 完全失去 native function、user 確認
+- ✅ Issue 2 v2：rapid press 在 transcribing window 內也能 trigger 新錄音、user 確認
+- ✅ 13 條原始 acceptance（user dogfood 涵蓋）
+
+最終 metrics：
+- **9 M4 commits**（chunk 0-4 + reviewer fix + paste split + docs + 2 acceptance fixes）
+- **157 cargo tests** + **16 vitest tests** all pass
+- 5 chunks + 2 reviewer passes + 2 acceptance fix rounds
+- Working tree clean、static checks 全綠
+
+### 給 M5 implementer 的 transition note
+
+M5 HUD overlay 接 4 個 visual states 來自 useVoiceFlowStore.status（已就緒）、不需動 Rust 端。但要注意：
+- M4 acceptance v2 後 voice flow store 已有 **session counter + paste chain**、M5 不要重蹈覆轍
+- HUD `WS_EX_NOACTIVATE` 已 apply（M4 chunk 2）、M5 不要 disable
+- chunk 3 reviewer 提的 2 P2（async listener race + PASTE_FOCUS_RESTORE_FAILED collision）M5 owns、要在 HUD visual binding 時一起處理

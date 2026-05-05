@@ -6,16 +6,16 @@
 ## 現在在哪
 
 - **Phase**：Phase 1 — OSS MVP
-- **進度**：M0 ✅ Done（2026-05-02）／ M1 ✅ Done（2026-05-02、PR #3 merged）／ M2 ✅ Done（2026-05-03、PR #4 merged）／ M3 ✅ Done（2026-05-04、plan refinements PR #5 + impl PR #6 merged）／ **M4 ✅ Implementation done**（2026-05-05、本 worktree branch `claude/m4-hotkey-paste` — 待 user 跑 13-condition manual acceptance + open PR）／ M5 📋 Planned next
+- **進度**：M0 ✅ Done（2026-05-02）／ M1 ✅ Done（2026-05-02、PR #3 merged）／ M2 ✅ Done（2026-05-03、PR #4 merged）／ M3 ✅ Done（2026-05-04、plan refinements PR #5 + impl PR #6 merged）／ **M4 ✅ Done**（2026-05-05、acceptance 過、本 worktree branch `claude/m4-hotkey-paste` 等 push + PR）／ M5 📋 Planned next
 - **正式 milestone 表**：[doc/plans/02-implementation-roadmap.md](../doc/plans/02-implementation-roadmap.md#進度-dashboard)
-- **GitHub**：[Luluboy168/TalkType](https://github.com/Luluboy168/TalkType)、main 已含 M0 + M1 + M2 + M3 完整實作（PR #1 + #3 + #4 + #5 + #6 merged）；M4 在 `claude/m4-hotkey-paste` branch 等 user dogfood acceptance 後 PR
+- **GitHub**：[Luluboy168/TalkType](https://github.com/Luluboy168/TalkType)、main 已含 M0 + M1 + M2 + M3 完整實作（PR #1 + #3 + #4 + #5 + #6 merged）；M4 在 `claude/m4-hotkey-paste` branch acceptance 通過、user 開 PR 後 merge
 
-## 下個 session 接手 SOP（M5 / M4 acceptance 後）
+## 下個 session 接手 SOP（M5 / M4 PR merge 後）
 
-1. **User 待辦（M4 收尾）**：跑 [`docs/m4-acceptance.md`](../docs/m4-acceptance.md) 13 條 manual acceptance（Notepad / Word / Slack / Edge × Hold + Toggle + ESC + 改熱鍵 + modifier residue + 5x burst + AltGr + IME + UAC + RunEvent::Exit）；任何 P0 fail 回 main session 修
-2. **若 M4 acceptance pass** → push `claude/m4-hotkey-paste` → 開 PR → merge → start M5（HUD overlay 完成、4 個 visual states + ARIA + reduced-motion）
+1. **User 收尾**：在 `claude/m4-hotkey-paste` branch 跑 `git push -u origin claude/m4-hotkey-paste` + `gh pr create` → CI 過 → merge
+2. **M4 merge 後 start M5**（HUD overlay 完成、4 個 visual states + ARIA + reduced-motion）
 3. **M5 開工前**（同 M4 模式）：plan-time challenger 必跑、讀 SayIt `NotchHud.vue` 861-line 教訓 + `prefers-reduced-motion` 缺口
-4. **若 M4 acceptance 找出 P0**：在 `claude/m4-hotkey-paste` 上修、再跑一次 acceptance、PR 後 merge
+4. **M5 設計重點**：useVoiceFlowStore 已 emit 4 logical states（idle/recording/transcribing/success/error）、HUD 只負責 visual binding；M5 加 6-bar waveform 接 `audio:waveform` event（M2 已 emit 60fps）、spinner、success ✓ icon、error ✗ icon、auto-hide timers（success 1s、error 3s、recording 持續顯示）；HUD `WS_EX_NOACTIVATE`（M4 chunk 2 已加）保證 paste target 不被搶 focus
 
 ## 最近的 session
 
@@ -25,7 +25,7 @@
 | [2026-05-02](sessions/2026-05-02-m1-dual-window.md) | M1 Dual-window IPC + tray + single-instance | ✅ M1 done、3 chunks 落地、static checks all green、Tauri dev build smoke pass |
 | [2026-05-03](sessions/2026-05-03-m2-audio-recorder.md) | M2 Audio Recorder Pipeline (cpal + hound + rustfft) | ✅ M2 done、3 chunks 落地、27 cargo tests pass、Settings mic picker + Dashboard record-test card 整合、static checks all green |
 | [2026-05-04](sessions/2026-05-04-m3-cloud-transcription.md) | M3 Cloud Transcription (Groq Whisper + credentials + test connection) | ✅ M3 done、4 chunks 落地（retro 收尾 + credentials + transcription + test+UI+docs）、94 cargo tests pass、Settings 測試連線 + Dashboard 測試轉錄、static checks all green |
-| [2026-05-05](sessions/2026-05-05-m4-hotkey-paste.md) | M4 Global Hotkey + Paste (SetWindowsHookExW + arboard STA + AltGr suppression + modifier residue + IME complete + 7-step paste pipeline) | ✅ M4 implementation done、5 chunks（0=deps/types/docs、1=hotkey_listener、2=clipboard_paste+HUD WS_EX_NOACTIVATE、3=settings.rs+useVoiceFlowStore、4=Settings UI+13 acceptance conditions）+ 2 reviewer passes（chunks 1+2 found 4 P1、chunk 3 found 0/0/2P2）+ paste.rs 拆 6 sub-modules、154 cargo tests + 14 vitest pass、static checks all green、待 user dogfood acceptance |
+| [2026-05-05](sessions/2026-05-05-m4-hotkey-paste.md) | M4 Global Hotkey + Paste (SetWindowsHookExW + arboard STA + AltGr suppression + modifier residue + IME complete + 7-step paste pipeline) | ✅ M4 done、5 chunks + 2 reviewers + paste.rs split + 2 acceptance fixes（issue 1 keystroke suppression + issue 2 v2 parallel transcribes + session counter + paste serialization）；157 cargo tests + 16 vitest pass、acceptance 通過 |
 
 ## Memory file 結構
 
