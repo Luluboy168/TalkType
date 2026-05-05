@@ -127,6 +127,15 @@
 - **Async listener registration race in `useVoiceFlowStore.init()`（M5 owns）**：`useVoiceFlowStore.ts:206-241` 用 `void listenToEvent(...).then(unlisten => unlistenFns.push(unlisten))`。`listenToEvent` 是 async 回 Promise、events fired between `init()` 呼叫與 Promise resolve 之間會丟失。Phase 1 HUD bootstrap 比 user reflex 快、不會踩；M5 加 HUD visual states 時 consider 改 `init()` 回 Promise + await all `listen` registrations 才宣告 ready。
 - **`PASTE_FOCUS_RESTORE_FAILED` 已 active state collision（M5 owns）**：`useVoiceFlowStore.ts:230-241` 若此 event 在 `transcribing` 中發 (極少見的 race：paste 失敗剛好撞上下一個 HOTKEY_PRESSED 開新 flow)，會把已 active 的新 flow state 清成 `error`。Phase 1 paste ordering 幾乎不可能踩；M5 HUD 擁有 visual state 時要處理 collision (e.g. only transition if status === 'recording'/'transcribing' for THIS paste cycle)。
 
+## M5 plan-time challenger findings（2026-05-05 — 不在 M5 scope、留下次）
+
+> 由 M5 開工前 plan-time challenger subagent 找出（agentId `abe35088f7a648bf9`）。P0 + P1（除以下）已折進 spec + plan、main session 修計畫不修 code。以下 P1-2 + 3 個 P2 留 M9 / Phase 2。
+
+- **P1-2：Vitest 測 `<Transition mode="out-in">` 在 jsdom 不可靠（M5 chunk 2 implementer 認知）**：jsdom + Vue 3.5 transition hooks 多半 sync、無 real animation。M5 chunk 2 vitest tests 只測 state→class mapping after `nextTick()`、transition timing 留 Playwright 驗證；implementer 要知道別跟 jsdom 的 transition timing 對打。
+- **P2-1：Dashboard sidebar 只顯示 `recording`、不顯示 `transcribing` / `error`（Phase 2）**：M5 簡版 — user 按熱鍵走開、轉錄期 / 失敗時 sidebar 沒回饋。Phase 2 加多 state badge / tooltip。
+- **P2-2：`aria-live="polite"` 連續同訊息 SR 不 announce（Phase 2 a11y polish）**：rapid hotkey press → recording → transcribing → recording → transcribing 第二輪 SR 可能略過。Phase 2 用 dummy aria-label change（加無意義 trailing space 或變數）強制 announce。
+- **P2-3：HudSpinner 30 LOC 可考慮 inline 進 HudOverlay template（cosmetic）**：4-component 切分對 30 LOC 的 spinner 略 over-engineered；chunk 2 implementer 可自行決定 inline 與否、無強制。
+
 ## Phase 2 / 後期想法
 
 - **macOS dev setup**：目前 doc 只 describe 設計，沒實機跑過。Phase 2 啟動時要做 spike。

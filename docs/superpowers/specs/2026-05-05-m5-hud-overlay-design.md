@@ -77,11 +77,13 @@
 
 ### 3.1 Active-monitor logic
 
-`handleStart` 流程：
-1. `await invoke("position_hud_for_active_monitor")` （新 Rust command）
+`handleStart` 流程（**positioning 失敗不阻擋 recording — challenger P1-8**）：
+1. `try { await invoke("position_hud_for_active_monitor") } catch (err) { console.warn("[hud] positioning failed, using last position", err); }` （新 Rust command；失敗 fallback 到 HUD 上次位置 / tauri.conf 預設）
 2. `await invoke("capture_target_window")`
 3. `await invoke("start_recording", { deviceName: null })`
 4. `transitionTo("recording", "")`
+
+**理由**：定位是裝飾性、錄音是核心；定位錯不應該卡 user 的核心流程。
 
 ### 3.2 Rust 實作策略
 
@@ -181,16 +183,31 @@ Tauri webview 用 logical pixels、OS 自動 scale。Implementer 確保：
 
 ## 6. Cross-window event：`voice-flow:state-changed`
 
-### 6.1 Emit 端（HUD）
+### 6.1 Emit 端（HUD）— 一律單向 HUD → Dashboard
+
+**Refined per challenger P0-1**：用 `emitTo("main-window", ...)` 顯式 target Dashboard、不用 `emit()` broadcast；Payload 加 `source: "hud"` 欄位防 echo loop（HUD 自身 listener 若未來加上、可 filter 自家 event）。
 
 `useVoiceFlowStore.transitionTo(next, msg)`：
 ```typescript
+import { emitTo } from "@tauri-apps/api/event";
+
 async function transitionTo(next: VoiceFlowStatus, msg: string): Promise<void> {
   status.value = next;
   message.value = msg;
-  await emit("voice-flow:state-changed", { status: next, message: msg });
+  // Best-effort emit; failure 不破壞 state machine
+  try {
+    await emitTo("main-window", "voice-flow:state-changed", {
+      status: next,
+      message: msg,
+      source: "hud",  // future-proof: Dashboard listener filter `if (payload.source !== 'hud') return;`
+    });
+  } catch (err) {
+    console.warn("[voice-flow] cross-window emit failed", err);
+  }
 }
 ```
+
+`VoiceFlowStateChangedPayload` 對應加 `source: "hud" | "dashboard"`（chunk 0 types update）。
 
 ### 6.2 Listen 端（Dashboard）
 
@@ -256,11 +273,33 @@ store.init().then((cleanup) => {
 });
 ```
 
-### 7.2 移除 `paste:focus-restore-failed` listener
+### 7.2 移除 `paste:focus-restore-failed` listener + 友善訊息 fallback（Refined per challenger P0-3）
+
+**Refined**：原計畫單純移除 listener、但 listener 原本給 user 看的「`{message}（請手動 Ctrl+V）`」會丟失、`handleStop` catch 的 Rust enum Display 字串太技術。改成 **`formatError` 內 pattern-match Rust error 加友善 i18n 訊息**：
 
 ```typescript
-// REMOVED in M5:
-// void listenToEvent<PasteFocusRestoreFailedPayload>(PASTE_FOCUS_RESTORE_FAILED, ...);
+// REMOVED in M5: paste:focus-restore-failed listener (redundant + collision risk)
+// MOVED: friendly "請手動 Ctrl+V" hint into formatError() pattern match.
+
+function formatError(err: unknown): string {
+  const raw = (() => {
+    if (typeof err === "string") return err;
+    if (err instanceof Error) return err.message;
+    if (err && typeof err === "object" && "message" in err) {
+      const msg = (err as { message: unknown }).message;
+      if (typeof msg === "string") return msg;
+    }
+    return "Unknown error";
+  })();
+
+  // Pattern match for known Rust error variants → friendly i18n
+  if (raw.startsWith("Focus restore failed") || raw.includes("FocusRestoreFailed")) {
+    // i18n key 在 chunk 2 加；M5 chunk 1 先 hardcode zh-TW、後續 i18n 化
+    return `${raw}（請手動 Ctrl+V）`;
+  }
+
+  return raw;
+}
 ```
 
 理由：
@@ -268,6 +307,7 @@ store.init().then((cleanup) => {
 - `handleStop` 的 try/catch 已捕 error → 走 `handleError` → transition 到 error
 - listener 是重複觸發（已 transition 一次再 transition 一次）
 - 移除 listener 順便解決 IDEAS 標的「state collision in transcribing」（無 listener 就無 collision）
+- **新增**：友善 hint 移進 `formatError` pattern match、不靠 listener 補充
 - Rust 端 event 繼續 emit、為未來 Dashboard tooltip 用
 
 ### 7.3 加 `dismissError()`
@@ -416,7 +456,15 @@ onUnmounted(() => {
   padding: 0.5rem 1rem;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
-.bubble-label { font-size: 0.875rem; font-weight: 500; }
+.bubble-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  /* P1-1: error message overflow safety — bubble width 380px max, trim long Rust error strings */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
 
 /* fade transition (200ms) */
 .fade-enter-active, .fade-leave-active { transition: opacity 200ms ease, transform 200ms ease; }
@@ -563,20 +611,73 @@ onUnmounted(() => { unlisten?.(); });
 
 ### 10.1 `position_hud_for_active_monitor()` command
 
+**Refined per challenger P0-2**：Tauri 2 stable 沒有 `Manager::cursor_position()` API（spec 之前誤標）。Chunk 0 直接用 raw Win32 `GetCursorPos`、不嘗試 Tauri 抽象、避免 implementer 來回踩雷。**Pure helpers 強制 extract** 為單獨函式以利 cargo test。
+
 ```rust
+use windows::Win32::Foundation::POINT;
+use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+use tauri::{AppHandle, Manager, PhysicalPosition};
+
+/// Pure data struct for testable helper signatures (Tauri's Monitor 不易 construct in tests)
+pub struct MonitorRect {
+    pub position: PhysicalPosition<i32>,
+    pub size: tauri::PhysicalSize<u32>,
+    pub scale_factor: f64,
+}
+
+impl From<&tauri::Monitor> for MonitorRect {
+    fn from(m: &tauri::Monitor) -> Self {
+        Self {
+            position: *m.position(),
+            size: *m.size(),
+            scale_factor: m.scale_factor(),
+        }
+    }
+}
+
+/// Pure helper — testable without Win32
+pub fn pick_monitor(monitors: &[MonitorRect], cursor: (i32, i32)) -> &MonitorRect {
+    monitors.iter()
+        .find(|m| {
+            let x_in = cursor.0 >= m.position.x && cursor.0 < m.position.x + m.size.width as i32;
+            let y_in = cursor.1 >= m.position.y && cursor.1 < m.position.y + m.size.height as i32;
+            x_in && y_in
+        })
+        .unwrap_or(&monitors[0])  // fallback to first if cursor outside all
+}
+
+/// Pure helper — testable
+pub fn compute_centered_position(
+    monitor: &MonitorRect,
+    hud_logical: (f64, f64),
+    y_offset_logical: f64,
+) -> PhysicalPosition<f64> {
+    let hud_physical_w = hud_logical.0 * monitor.scale_factor;
+    let centered_x = monitor.position.x as f64 + (monitor.size.width as f64 - hud_physical_w) / 2.0;
+    let y = monitor.position.y as f64 + y_offset_logical * monitor.scale_factor;
+    PhysicalPosition::new(centered_x, y)
+}
+
 #[tauri::command]
-pub async fn position_hud_for_active_monitor(
-    app: AppHandle,
-) -> Result<(), HudError> {
-    // 詳細實作由 implementer 決定；優先用 Tauri API，fallback raw Win32
-    let hud = app.get_webview_window("main")
-        .ok_or(HudError::WindowMissing)?;
-    let cursor_pos = get_cursor_position()?;  // raw Win32 GetCursorPos
-    let monitors = hud.available_monitors()?;
-    let target = pick_monitor(&monitors, cursor_pos);
-    let position = compute_centered_position(target, /* hud size */ (380.0, 56.0), /* y */ 50.0);
-    hud.set_position(position)?;
+pub async fn position_hud_for_active_monitor(app: AppHandle) -> Result<(), HudError> {
+    let hud = app.get_webview_window("main").ok_or(HudError::WindowMissing)?;
+    let cursor = get_cursor_position()?;
+    let tauri_monitors = hud.available_monitors().map_err(|e| HudError::MonitorEnumerationFailed(e.to_string()))?;
+    let monitors: Vec<MonitorRect> = tauri_monitors.iter().map(MonitorRect::from).collect();
+    if monitors.is_empty() { return Err(HudError::MonitorEnumerationFailed("no monitors".into())); }
+    let target = pick_monitor(&monitors, cursor);
+    let position = compute_centered_position(target, (380.0, 56.0), 50.0);
+    hud.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(position.x as i32, position.y as i32)))
+        .map_err(|e| HudError::SetPositionFailed(e.to_string()))?;
     Ok(())
+}
+
+fn get_cursor_position() -> Result<(i32, i32), HudError> {
+    let mut point = POINT { x: 0, y: 0 };
+    unsafe {
+        GetCursorPos(&mut point).map_err(|e| HudError::CursorQueryFailed(e.to_string()))?;
+    }
+    Ok((point.x, point.y))
 }
 ```
 
@@ -584,6 +685,9 @@ pub async fn position_hud_for_active_monitor(
 
 ### 10.2 `set_hud_visible_for_dev(visible: bool)` command
 
+**Refined per challenger P1-6**：Cfg-strip 在 `generate_handler!` macro 展開階段可能撞 toolchain bug、release build 編譯失敗。改成「兩條 generate_handler 路徑」用 `cfg!` 分支。
+
+`hud.rs`：
 ```rust
 #[cfg(debug_assertions)]
 #[tauri::command]
@@ -593,12 +697,29 @@ pub async fn set_hud_visible_for_dev(
 ) -> Result<(), HudError> {
     let hud = app.get_webview_window("main")
         .ok_or(HudError::WindowMissing)?;
-    if visible { hud.show()?; } else { hud.hide()?; }
+    if visible { hud.show().map_err(|e| HudError::WindowOpFailed(e.to_string()))?; }
+    else { hud.hide().map_err(|e| HudError::WindowOpFailed(e.to_string()))?; }
     Ok(())
 }
 ```
 
-註冊在 `tauri::generate_handler!` 但用 `#[cfg(debug_assertions)]` block 包；release build 不暴露此 command。
+`lib.rs` 註冊：
+```rust
+// Two paths via cfg! macro — Rust compiler strips the unused branch entirely
+#[cfg(debug_assertions)]
+let invoke_handler = tauri::generate_handler![
+    /* ... 既有 commands ... */
+    plugins::hud::position_hud_for_active_monitor,
+    plugins::hud::set_hud_visible_for_dev,  // debug-only
+];
+#[cfg(not(debug_assertions))]
+let invoke_handler = tauri::generate_handler![
+    /* ... 既有 commands ... */
+    plugins::hud::position_hud_for_active_monitor,
+];
+```
+
+Release build 編譯時 `set_hud_visible_for_dev` symbol 完全不存在；frontend 試 invoke 會直接 IPC error。
 
 ### 10.3 新 file：`src-tauri/src/plugins/hud.rs`
 
@@ -734,6 +855,8 @@ pub async fn set_hud_visible_for_dev(
 | `voice-flow:state-changed` event 廣播太頻繁影響 perf | Dashboard 重 render | M5 4 個 transitions / flow → 4 emits、trivial |
 | Vue `<Transition mode="out-in">` 與 reactivity update 順序撞 click-through `setIgnoreCursorEvents` await | race：transition 進場時 click-through 還未切換 | chunk 2 implementer 在 `watch` callback 同步 await、確認 await sequence 對 |
 | `available_monitors()` Tauri API 在 multi-monitor 處理 DPI scaling 不對 | HUD 在 secondary monitor 位置歪 | chunk 0 implementer Win32 raw fallback 留 escape hatch |
+| **cpal stream 不一定能 survive system sleep（challenger P1-4）** | recording 中 sleep 醒來、stream 已死、HudTimer 仍 tick、user 誤以為仍錄音 | M5 acceptance #15 加「sleep mid-recording 行為」條件、implementer 選 (a) 自動 cancel 進 idle 或 (b) 維持 timer 顯示但加 stale-state warning；任一行為 documented in `docs/m5-acceptance.md` |
+| **HudWaveform mount/unmount on rapid hotkey press 期間 useAudioWaveform.start() race（challenger P1-3）** | rapid press → mount → start() in-flight → unmount → stop() 找不到 unlisten → leaked listener | chunk 2 implementer 加 `starting` flag in `useAudioWaveform.ts` 防 race（trivial fix） |
 
 ## 15. 與 SayIt 對比
 
