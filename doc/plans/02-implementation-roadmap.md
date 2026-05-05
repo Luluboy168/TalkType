@@ -13,7 +13,7 @@
 | M1：基礎 IPC + 雙視窗 | ✅ Done | 2026-05-02 | 2026-05-02 |
 | M2：錄音 pipeline (Rust) | ✅ Done | 2026-05-03 | 2026-05-03 |
 | M3：Cloud transcription | ✅ Done | 2026-05-04 | 2026-05-04 |
-| M4：全域熱鍵 + paste | 📋 Planned | TBD | TBD |
+| M4：全域熱鍵 + paste | ✅ Implementation done（待 user acceptance） | 2026-05-05 | 2026-05-05 |
 | M5：HUD overlay | 📋 Planned | TBD | TBD |
 | M6：LLM polish 多 provider | 📋 Planned | TBD | TBD |
 | M7：Local whisper.cpp | 📋 Planned | TBD | TBD |
