@@ -61,7 +61,7 @@ describe("useVoiceFlowStore", () => {
     expect(store.recordingStartedAtMs).toBeTypeOf("number");
   });
 
-  it("handleStart is a no-op when not in idle state", async () => {
+  it("handleStart is a no-op when already recording", async () => {
     // Simulate the store already being in "recording" — handleStart should
     // bail before any invoke call.
     const store = useVoiceFlowStore();
@@ -71,6 +71,85 @@ describe("useVoiceFlowStore", () => {
     await store.handleStart(); // recording → no-op
     expect(mockInvoke).not.toHaveBeenCalled();
     expect(store.status).toBe("recording");
+  });
+
+  it("handleStart from success state re-triggers (rapid press fix)", async () => {
+    // M4 acceptance fix: after release the flow goes through transcribing →
+    // success (1s linger) → idle. Old code only allowed handleStart from
+    // idle, dropping fresh presses during the 2-3s gap. The relaxed guard
+    // lets the user re-trigger as soon as paste completes (success state).
+    const store = useVoiceFlowStore();
+
+    // Drive through a full pipeline to land in "success".
+    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
+    mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+    await store.handleStart();
+    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
+    mockInvoke.mockResolvedValueOnce({
+      rawText: "first",
+      transcriptionDurationMs: 100,
+      noSpeechProbability: null,
+    }); // transcribe_audio
+    mockInvoke.mockResolvedValueOnce(undefined); // paste_text
+    await store.handleStop();
+    expect(store.status).toBe("success");
+
+    // Press again BEFORE the 1s success linger expires. Old behavior was
+    // a silent no-op; new behavior is a fresh recording.
+    mockInvoke.mockClear();
+    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
+    mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+    await store.handleStart();
+    expect(store.status).toBe("recording");
+    expect(mockInvoke).toHaveBeenNthCalledWith(1, "capture_target_window");
+    expect(mockInvoke).toHaveBeenNthCalledWith(2, "start_recording", {
+      deviceName: null,
+    });
+  });
+
+  it("handleStart is a no-op while transcribing (would race the busy guard)", async () => {
+    // Transcribing is the only non-recording state we still block — Rust's
+    // transcribe_busy AtomicBool would reject the next transcribe anyway,
+    // so starting a new recording while the previous transcribe is in
+    // flight just queues a doomed call.
+    const store = useVoiceFlowStore();
+
+    // Get into recording.
+    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
+    mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+    await store.handleStart();
+    expect(store.status).toBe("recording");
+
+    // Stop and let the transcribe_audio call hang so we land in
+    // "transcribing" without resolving.
+    let resolveTranscribe: (value: unknown) => void = () => {};
+    const transcribePromise = new Promise((resolve) => {
+      resolveTranscribe = resolve;
+    });
+    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
+    mockInvoke.mockReturnValueOnce(transcribePromise); // transcribe_audio (pending)
+
+    const stopPromise = store.handleStop();
+
+    // Yield once so handleStop reaches the transcribing transition.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.status).toBe("transcribing");
+
+    // Press while transcribing → no-op.
+    mockInvoke.mockClear();
+    await store.handleStart();
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(store.status).toBe("transcribing");
+
+    // Resolve the hanging transcribe + paste so the test cleans up.
+    mockInvoke.mockResolvedValueOnce(undefined); // paste_text
+    resolveTranscribe({
+      rawText: "ok",
+      transcriptionDurationMs: 50,
+      noSpeechProbability: null,
+    });
+    await stopPromise;
   });
 
   it("handleStop from recording transitions through transcribing → success → idle and pastes raw text", async () => {

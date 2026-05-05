@@ -89,18 +89,31 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
    *   1. capture_target_window
    *   2. start_recording (deviceName: null = cpal default)
    *   3. transition to "recording"
+   *
+   * **Guard policy** (M4 acceptance fix): allow start from `idle | success
+   * | error`, block from `recording | transcribing`. Old code only allowed
+   * `idle`, which made rapid press feel broken — after release the flow
+   * goes through `transcribing → success (1s linger) → idle`, a 2-3s
+   * window where a fresh press got silently dropped. The relaxed guard
+   * lets the user immediately re-trigger as soon as paste completes
+   * (success state) or after an error auto-revert (error state). We still
+   * block `recording` (already going) and `transcribing` (Rust's
+   * transcribe_busy guard would reject the next transcribe anyway, so
+   * starting a new recording would just queue a doomed call).
    */
   async function handleStart(): Promise<void> {
-    if (status.value !== "idle") return;
+    if (status.value === "recording" || status.value === "transcribing") {
+      return;
+    }
     try {
       await invoke<void>("capture_target_window");
       await invoke<void>("start_recording", { deviceName: null });
       recordingStartedAtMs.value = Date.now();
       transitionTo("recording", "");
     } catch (err) {
-      // start_recording can fail with `Busy` if a previous transcribe is
-      // still in flight or the recorder is already running. Either way we
-      // surface as error and let the auto-revert timer reset to idle.
+      // start_recording can fail with `Busy` if the recorder is already
+      // running. Either way we surface as error and let the auto-revert
+      // timer reset to idle.
       handleError(err);
     }
   }

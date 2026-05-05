@@ -334,12 +334,26 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
 
     // Look up shared context. `OnceLock::get()` is lock-free and
     // wait-free after `set()` — exactly what the hook proc needs.
-    if let Some(ctx) = SHARED_CTX.get() {
+    //
+    // Compute `should_suppress` BEFORE `apply_event` so the decision uses
+    // a consistent snapshot of the configured trigger key. Both reads from
+    // the same atomics; doing them in two sequential calls is fine because
+    // hot-swap (`set_trigger_key`) is rare and the worst case is one event
+    // straddling a swap (acceptable — the next event will be consistent).
+    let should_suppress = if let Some(ctx) = SHARED_CTX.get() {
+        let suppress = ctx.state.should_suppress(&key_event);
         let events = ctx.state.apply_event(key_event);
         for ev in events {
             dispatch_event(&ctx.app, ctx.state.as_ref(), ev);
         }
-    }
+        suppress
+    } else {
+        // Hook proc fired before `install_hook` planted SHARED_CTX. Should
+        // not happen in practice (install plants synchronously before the
+        // listener thread starts pumping messages) but be defensive — pass
+        // through rather than randomly suppressing.
+        false
+    };
 
     // Diagnostic: warn if the hook took an unusually long time. Hot path
     // should be sub-millisecond.
@@ -353,10 +367,22 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
         );
     }
 
-    // Always defer to next hook so accessibility tools etc. still see the
-    // event. We never `return LRESULT(1)` (which would consume the key)
-    // — Phase 1 is purely observational.
-    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+    if should_suppress {
+        // Swallow the key — the OS will not deliver this event to the
+        // next hook in the chain or to the foreground window. This makes
+        // our trigger key (e.g. Right Alt) invisible to other apps so
+        // pressing it no longer fires app-native shortcuts (Word's menu
+        // bar, Notepad's File menu, etc.).
+        //
+        // Returning LRESULT(1) is the documented way per
+        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nc-winuser-lowlevelkeyboardproc#return-value
+        LRESULT(1)
+    } else {
+        // Defer to next hook so accessibility tools etc. still see the
+        // event. AltGr characters and ESC always take this path so EU
+        // keyboard input + escape semantics are preserved.
+        unsafe { CallNextHookEx(None, code, wparam, lparam) }
+    }
 }
 
 /// Dispatch a `HotkeyEvent` to the matching Tauri event over the app

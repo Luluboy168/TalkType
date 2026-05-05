@@ -121,6 +121,38 @@ impl HotkeySharedState {
             .store(NO_PRIOR_RELEASE_MS, Ordering::Relaxed);
     }
 
+    /// Decide whether the OS-level hook proc should swallow this keystroke
+    /// (`LRESULT(1)`) instead of forwarding to the next hook + target window
+    /// (`CallNextHookEx`). Suppression makes the configured trigger key
+    /// invisible to other apps so it can no longer trigger app-native
+    /// shortcuts (e.g. `Right Alt` opening the menu bar in Word / Notepad).
+    ///
+    /// Decision tree (must align with `apply_event` so the user's mental
+    /// model matches):
+    ///
+    ///   1. AltGr active (LCONTROL + RMENU) → **don't** suppress; we must
+    ///      let the OS deliver the AltGr-prefixed character (€, @, # on EU
+    ///      keyboards). `apply_event` already drops the dispatch; this only
+    ///      ensures the keystroke still reaches the target.
+    ///   2. ESC → **don't** suppress; ESC has too many target-app uses
+    ///      (close dialog, cancel, etc.) and our use case (cancel recording)
+    ///      is additive. We emit the `escape:pressed` event but still let
+    ///      ESC propagate.
+    ///   3. `vk` matches the configured trigger → **suppress**, regardless
+    ///      of mode (Hold / Toggle) and direction (down / up). Symmetric
+    ///      suppression of both down and up prevents stray modifier-up
+    ///      events from reaching the target.
+    ///   4. Anything else → **don't** suppress.
+    pub fn should_suppress(&self, ev: &KeyEvent) -> bool {
+        if ev.altgr_active {
+            return false;
+        }
+        if ev.vk == VK_ESCAPE {
+            return false;
+        }
+        ev.vk == self.current_trigger_key().virtual_key()
+    }
+
     /// Pure-logic step over a single raw `KeyEvent`. Returns the semantic
     /// `HotkeyEvent`(s) the platform layer should dispatch via `app.emit`.
     ///
@@ -542,5 +574,82 @@ mod tests {
             s.double_tap_last_release_ms.load(Ordering::Relaxed),
             NO_PRIOR_RELEASE_MS
         );
+    }
+
+    /// Configured trigger key must be suppressed — both down and up — so
+    /// target apps don't see the modifier and can't fire their native
+    /// shortcuts (e.g. Right Alt opening Word's menu bar).
+    #[test]
+    fn should_suppress_trigger_key_down_and_up() {
+        let s = HotkeySharedState::default();
+        let down = ev_trigger(&s, true, 100);
+        let up = ev_trigger(&s, false, 200);
+        assert!(s.should_suppress(&down), "trigger down must suppress");
+        assert!(s.should_suppress(&up), "trigger up must suppress");
+    }
+
+    /// AltGr-active events (LCONTROL + RMENU on EU keyboards) must NOT
+    /// be suppressed — the OS still needs to deliver `€ @ #` etc. to the
+    /// target window.
+    #[test]
+    fn should_not_suppress_when_altgr_active() {
+        let s = HotkeySharedState::default();
+        let altgr = KeyEvent {
+            vk: TriggerKey::RightAlt.virtual_key(),
+            is_down: true,
+            ts_ms: 100,
+            altgr_active: true,
+        };
+        assert!(!s.should_suppress(&altgr));
+    }
+
+    /// ESC must pass through to target apps (close dialog, cancel, etc.).
+    /// The escape:pressed event we emit is additive, not exclusive.
+    #[test]
+    fn should_not_suppress_escape() {
+        let s = HotkeySharedState::default();
+        let esc = KeyEvent {
+            vk: VK_ESCAPE,
+            is_down: true,
+            ts_ms: 100,
+            altgr_active: false,
+        };
+        assert!(!s.should_suppress(&esc));
+    }
+
+    /// Non-trigger keys (any other VK) must not be suppressed.
+    #[test]
+    fn should_not_suppress_unrelated_keys() {
+        let s = HotkeySharedState::default();
+        let unrelated = KeyEvent {
+            vk: 0x41, // 'A'
+            is_down: true,
+            ts_ms: 100,
+            altgr_active: false,
+        };
+        assert!(!s.should_suppress(&unrelated));
+    }
+
+    /// After hot-swap to a different trigger key, the OLD trigger no
+    /// longer suppresses; the NEW one does.
+    #[test]
+    fn should_suppress_follows_trigger_key_hot_swap() {
+        let s = HotkeySharedState::default();
+        s.set_trigger_key(TriggerKey::RightControl);
+
+        let old_trigger = KeyEvent {
+            vk: TriggerKey::RightAlt.virtual_key(),
+            is_down: true,
+            ts_ms: 100,
+            altgr_active: false,
+        };
+        let new_trigger = KeyEvent {
+            vk: TriggerKey::RightControl.virtual_key(),
+            is_down: true,
+            ts_ms: 100,
+            altgr_active: false,
+        };
+        assert!(!s.should_suppress(&old_trigger));
+        assert!(s.should_suppress(&new_trigger));
     }
 }
