@@ -49,4 +49,27 @@ describe("HudWaveform", () => {
     wrapper.unmount();
     expect(stopMock).toHaveBeenCalledTimes(1);
   });
+
+  it("does NOT call start() when mounted with reducedMotion=true (P2-1)", () => {
+    // Energy-conscious: spec §5.2 says reduced motion should not run RAF.
+    startMock.mockClear();
+    stopMock.mockClear();
+    const wrapper = mount(HudWaveform, { props: { reducedMotion: true } });
+    expect(startMock).not.toHaveBeenCalled();
+    wrapper.unmount();
+    // stop() still runs at unmount (idempotent — useAudioWaveform.stop guards)
+    expect(stopMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles between start() and stop() when reducedMotion prop changes", async () => {
+    startMock.mockClear();
+    stopMock.mockClear();
+    const wrapper = mount(HudWaveform, { props: { reducedMotion: false } });
+    expect(startMock).toHaveBeenCalledTimes(1);
+    await wrapper.setProps({ reducedMotion: true });
+    expect(stopMock).toHaveBeenCalled();
+    startMock.mockClear();
+    await wrapper.setProps({ reducedMotion: false });
+    expect(startMock).toHaveBeenCalledTimes(1);
+  });
 });

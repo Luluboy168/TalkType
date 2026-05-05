@@ -451,16 +451,18 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
    * Playwright screenshot captures, without going through the hotkey →
    * Rust pipeline (which can't run without Tauri).
    *
-   * Tree-shaken from production by the `import.meta.env.DEV` guard at the
-   * call site (see `src/main.ts` `__hudDev.setStatus`). Even if a malicious
-   * caller invokes it in prod the worst outcome is a misrendered HUD —
-   * the function only writes the local state machine refs, no Rust IPC.
+   * **Production safety (chunk 2 reviewer P1-1)**: function body gated by
+   * `import.meta.env.DEV` so calls from production devtools no-op. The
+   * function still ships in the bundle (return-value typing keeps the
+   * symbol exported) but cannot mutate state — no risk of UI corruption
+   * or misrender from an opportunistic caller.
    */
   function __devSetStatus(
     next: VoiceFlowStatus,
     msg: string,
     startedAtMs: number | null,
   ): void {
+    if (!import.meta.env.DEV) return;
     status.value = next;
     message.value = msg;
     recordingStartedAtMs.value = startedAtMs;

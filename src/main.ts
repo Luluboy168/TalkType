@@ -44,6 +44,12 @@ if (import.meta.env.DEV) {
       ipc: () => {
         /* no-op */
       },
+      // Chunk 2 reviewer P1-2: stub `unregisterListener` so the unlisten
+      // returned by `listen()` doesn't crash on `useAudioWaveform.stop()`
+      // during state transitions in vite-only dev mode.
+      unregisterListener: (_event: string, _eventId: number): void => {
+        /* no-op */
+      },
       metadata: {
         currentWindow: { label: "main" },
         currentWebview: { label: "main", windowLabel: "main" },

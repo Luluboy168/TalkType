@@ -3,21 +3,29 @@
 //
 // Reads frame-smoothed levels from `useAudioWaveform` (M2). When
 // `prefers-reduced-motion: reduce` is on (passed in via `reducedMotion` prop),
-// renders a single static dot instead of animated bars + does not start the
-// listener / RAF loop — full ARIA fallback per spec §5.2.
+// renders a single static dot AND does not start the listener / RAF loop —
+// full energy-conscious ARIA fallback per spec §5.2 (chunk 2 reviewer P2-1).
 //
 // All decorative — `aria-hidden="true"` so the SR doesn't announce it.
-import { onMounted, onUnmounted } from "vue";
+import { onMounted, onUnmounted, watch } from "vue";
 
 import { useAudioWaveform } from "@/composables/useAudioWaveform";
 
-defineProps<{ reducedMotion: boolean }>();
+const props = defineProps<{ reducedMotion: boolean }>();
 
 const { smoothedLevels, start, stop } = useAudioWaveform();
 
 onMounted(() => {
-  void start();
+  if (!props.reducedMotion) void start();
 });
+// React to runtime reduced-motion toggle (system setting changed mid-session)
+watch(
+  () => props.reducedMotion,
+  (rm) => {
+    if (rm) stop();
+    else void start();
+  },
+);
 onUnmounted(stop);
 </script>
 
