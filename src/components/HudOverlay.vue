@@ -59,7 +59,14 @@ const transitionName = computed(() =>
 async function syncClickThrough(status: string): Promise<void> {
   // Keep window click-through-on for everything except error; the user must
   // be able to click the bubble to dismiss the error state.
-  await getCurrentWindow().setIgnoreCursorEvents(status !== "error");
+  // Surface failures (e.g. capability missing) so they don't fail silently —
+  // M5 acceptance found that without core:window:allow-set-ignore-cursor-events
+  // the IPC call rejects and HUD blocks all clicks.
+  try {
+    await getCurrentWindow().setIgnoreCursorEvents(status !== "error");
+  } catch (err) {
+    console.error("[hud] setIgnoreCursorEvents failed", err);
+  }
 }
 
 watch(
@@ -81,7 +88,12 @@ onMounted(async () => {
   mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
   reducedMotion.value = mediaQuery.matches;
   mediaQuery.addEventListener("change", handleMediaChange);
-  await getCurrentWindow().setIgnoreCursorEvents(true);
+  // Surface any capability / IPC error so M5 acceptance bugs don't go silent.
+  try {
+    await getCurrentWindow().setIgnoreCursorEvents(true);
+  } catch (err) {
+    console.error("[hud] initial setIgnoreCursorEvents(true) failed", err);
+  }
 });
 
 onUnmounted(() => {
@@ -158,6 +170,12 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   padding: 0.5rem 1rem;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  /* Defense-in-depth: prevent text selection inside HUD even if click-through
+     fails. User reported during M5 acceptance that the timer was 反白-able,
+     which signals a click-through gap; user-select:none kills that vector. */
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
 }
 
 .bubble-label {
