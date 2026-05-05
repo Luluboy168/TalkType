@@ -136,6 +136,21 @@
 - **P2-2：`aria-live="polite"` 連續同訊息 SR 不 announce（Phase 2 a11y polish）**：rapid hotkey press → recording → transcribing → recording → transcribing 第二輪 SR 可能略過。Phase 2 用 dummy aria-label change（加無意義 trailing space 或變數）強制 announce。
 - **P2-3：HudSpinner 30 LOC 可考慮 inline 進 HudOverlay template（cosmetic）**：4-component 切分對 30 LOC 的 spinner 略 over-engineered；chunk 2 implementer 可自行決定 inline 與否、無強制。
 
+## M5 chunk reviewer findings (2026-05-05 — chunk 2 & 3)
+
+> 由 M5 chunks 2+3 完成後 reviewer subagent 找出。Chunk 1 reviewer P0（formatError pattern）已 fix in `6af0992`；以下 chunk 2 reviewer P1-3 + chunk 3 reviewer P2 留下次。
+
+### Chunk 2 reviewer
+- **P1-3 docstring gap**：`useAudioWaveform.start` `starting` flag docstring 沒提「rejection 後 retry」semantics — 加 1-line clarification
+- **P1-5 fontsource preload for HUD entry (FOUT mitigation)**：`dist/index.html` HUD 載 Geist via fontsource、woff2 lazy load 後 CSS parse 後可能 FOUT。M9 polish 加 `<link rel="preload" as="font">`。
+
+### Chunk 3 reviewer
+- **P2-1 `SidebarFooter` empty wrapper artifact**（M9 polish）：idle 狀態下 `<SidebarFooter>` wrapper 仍 render 一個 padding 空 band；hoisting `v-if` 進 `AppSidebar.vue` parent 即可解。M9 dark mode polish 時順手做。
+- **P2-2 i18n key duplication**（M9 i18n consolidation）：`sidebar.recordingBadge` 與 `dashboard.audioTest.recording` 都是 "錄音中"；M9 i18n audit 時 consolidate。
+- **P2-3 `role="status"` on Dashboard badge 可能 SR 重複 announce**（Phase 2 a11y）：HUD + Dashboard 同時 `role="status"` 念兩次「Recording」；Phase 2 a11y testing 驗、可能改 Dashboard badge 為 `aria-hidden="true"`。
+- **P2-4 listener 沒 future-proof `message` field**（Phase 2 tooltip）：`HudFlowBadge.vue:41` 只讀 `payload.status`、若 Phase 2 加 tooltip 顯示 HUD message text、要回頭改 listener。
+- **P2-5 `main-window.ts` shim duplicated against `main.ts`**（M9 polish）：兩個 vite-only Tauri shim 重複；考慮抽 `src/dev/tauri-shim.ts` 共用 factory。
+
 ## Phase 2 / 後期想法
 
 - **macOS dev setup**：目前 doc 只 describe 設計，沒實機跑過。Phase 2 啟動時要做 spike。

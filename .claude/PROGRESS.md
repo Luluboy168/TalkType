@@ -6,16 +6,17 @@
 ## 現在在哪
 
 - **Phase**：Phase 1 — OSS MVP
-- **進度**：M0 ✅ Done（2026-05-02）／ M1 ✅ Done（2026-05-02、PR #3 merged）／ M2 ✅ Done（2026-05-03、PR #4 merged）／ M3 ✅ Done（2026-05-04、plan refinements PR #5 + impl PR #6 merged）／ **M4 ✅ Done**（2026-05-05、acceptance 過、本 worktree branch `claude/m4-hotkey-paste` 等 push + PR）／ M5 📋 Planned next
+- **進度**：M0 ✅ Done（2026-05-02）／ M1 ✅ Done（2026-05-02、PR #3 merged）／ M2 ✅ Done（2026-05-03、PR #4 merged）／ M3 ✅ Done（2026-05-04、plan refinements PR #5 + impl PR #6 merged）／ M4 ✅ Done（2026-05-05、acceptance 過、PR #8 merged）／ **M5 ✅ Implementation done**（2026-05-05、5 chunks 落地 + 1 reviewer P0 fix + chunk 2 P1/P2 polish；待 user manual acceptance — 14 conditions 詳見 [`docs/m5-acceptance.md`](../docs/m5-acceptance.md)、本 worktree branch `claude/nervous-napier-bc527a` 等 push + PR）／ M6 📋 Planned next
 - **正式 milestone 表**：[doc/plans/02-implementation-roadmap.md](../doc/plans/02-implementation-roadmap.md#進度-dashboard)
-- **GitHub**：[Luluboy168/TalkType](https://github.com/Luluboy168/TalkType)、main 已含 M0 + M1 + M2 + M3 完整實作（PR #1 + #3 + #4 + #5 + #6 merged）；M4 在 `claude/m4-hotkey-paste` branch acceptance 通過、user 開 PR 後 merge
+- **GitHub**：[Luluboy168/TalkType](https://github.com/Luluboy168/TalkType)、main 已含 M0 + M1 + M2 + M3 + M4 完整實作（PR #1 + #3 + #4 + #5 + #6 + #8 merged）；M5 在 `claude/nervous-napier-bc527a` branch、user acceptance 通過後開 PR
 
-## 下個 session 接手 SOP（M5 / M4 PR merge 後）
+## 下個 session 接手 SOP（M6 / M5 PR merge 後）
 
-1. **User 收尾**：在 `claude/m4-hotkey-paste` branch 跑 `git push -u origin claude/m4-hotkey-paste` + `gh pr create` → CI 過 → merge
-2. **M4 merge 後 start M5**（HUD overlay 完成、4 個 visual states + ARIA + reduced-motion）
-3. **M5 開工前**（同 M4 模式）：plan-time challenger 必跑、讀 SayIt `NotchHud.vue` 861-line 教訓 + `prefers-reduced-motion` 缺口
-4. **M5 設計重點**：useVoiceFlowStore 已 emit 4 logical states（idle/recording/transcribing/success/error）、HUD 只負責 visual binding；M5 加 6-bar waveform 接 `audio:waveform` event（M2 已 emit 60fps）、spinner、success ✓ icon、error ✗ icon、auto-hide timers（success 1s、error 3s、recording 持續顯示）；HUD `WS_EX_NOACTIVATE`（M4 chunk 2 已加）保證 paste target 不被搶 focus
+1. **User 收尾 M5**：跑 14 條 acceptance（`docs/m5-acceptance.md`）+ 在 `claude/nervous-napier-bc527a` branch 跑 `git push -u origin claude/nervous-napier-bc527a` + `gh pr create` → CI 過 → merge
+2. **M5 merge 後 start M6**（LLM polish 多 provider — Groq / OpenAI / Anthropic / Gemini 4 個 provider、Rust-side fetch、preset modes default/email/chat/code/custom）
+3. **M6 開工前**（同 M4/M5 模式）：plan-time challenger 必跑、讀 [`doc/plans/02-implementation-roadmap.md`](../doc/plans/02-implementation-roadmap.md#m6llm-polish-多-provider) M6 section + Typeless / Wispr Flow research findings + `doc/reference/sayit-improvements.md` 「LLM polish 隱私翻車」教訓
+4. **M6 設計重點**：原 frontend `lib/llmProvider.ts` 全移 Rust（守住「API key never crosses IPC」不變式）、4 provider 各自 request 形狀 unified dispatcher、preset modes 5 種（default 輕清理 / email 正式 / chat 口語 / code 保留格式 / custom 1000 char cap）、polish 失敗 fallback to raw Whisper text + warning（不擋 paste 流程）、Per-step data-flow indicator（避免 Typeless 隱私失調翻車）、polish busy guard（防雙重 polish 撞配額）
+5. **M5 已就緒給 M6 接續**：useVoiceFlowStore 已預留 `enhancing` status placeholder（spec §16）、HUD 只需在 §2 state mapping 表新加一行；voice flow `transitionTo` 已 emit cross-window event、Dashboard sidebar badge 可在 M6 拓展顯示 enhancing state（chunk 3 reviewer P2-4）
 
 ## 最近的 session
 
@@ -26,6 +27,7 @@
 | [2026-05-03](sessions/2026-05-03-m2-audio-recorder.md) | M2 Audio Recorder Pipeline (cpal + hound + rustfft) | ✅ M2 done、3 chunks 落地、27 cargo tests pass、Settings mic picker + Dashboard record-test card 整合、static checks all green |
 | [2026-05-04](sessions/2026-05-04-m3-cloud-transcription.md) | M3 Cloud Transcription (Groq Whisper + credentials + test connection) | ✅ M3 done、4 chunks 落地（retro 收尾 + credentials + transcription + test+UI+docs）、94 cargo tests pass、Settings 測試連線 + Dashboard 測試轉錄、static checks all green |
 | [2026-05-05](sessions/2026-05-05-m4-hotkey-paste.md) | M4 Global Hotkey + Paste (SetWindowsHookExW + arboard STA + AltGr suppression + modifier residue + IME complete + 7-step paste pipeline) | ✅ M4 done、5 chunks + 2 reviewers + paste.rs split + 2 acceptance fixes（issue 1 keystroke suppression + issue 2 v2 parallel transcribes + session counter + paste serialization）；157 cargo tests + 16 vitest pass、acceptance 通過 |
+| [2026-05-05](sessions/2026-05-05-m5-hud-overlay.md) | M5 HUD Overlay (4 visual states + 6-bar waveform + ARIA + reduced-motion + active-monitor positioning + Dashboard sidebar badge) | ✅ M5 implementation done、5 chunks 落地 + 1 chunk 1 reviewer P0 fix（formatError pattern）+ chunk 2 P1/P2 polish（DEV gate + shim + reduced-motion）；53 vitest + 163 cargo tests pass、0 P0 from chunk 0/2/3 reviewers、13 vite-shape screenshots、待 user manual acceptance |
 
 ## Memory file 結構
 
