@@ -13,9 +13,18 @@
 //                         add the local whisper.cpp branch behind the same
 //                         `transcribe_audio` Tauri command.
 //
-// Subsequent milestones add `audio_control`, `clipboard_paste`,
-// `hotkey_listener`, `llm_polish`, etc.
+//   * `clipboard_paste` — M4 chunk-2 (Windows paste pipeline). Module is
+//                         declared here so chunks 1 + 2 can run in parallel
+//                         without racing on this file; the implementation
+//                         lives in `clipboard_paste/{mod, paste}.rs`.
+//   * `hotkey_listener` — M4 chunk-1 (global hotkey via SetWindowsHookExW).
+//                         Same parallel-dispatch reason; implementation lives
+//                         in `hotkey_listener/{mod, windows, shared, types}.rs`.
+//
+// Subsequent milestones add `audio_control`, `llm_polish`, etc.
 
 pub mod audio_recorder;
+pub mod clipboard_paste;
 pub mod credentials;
+pub mod hotkey_listener;
 pub mod transcription;

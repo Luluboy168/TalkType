@@ -63,6 +63,25 @@
     "settings": {
       "heading": "Settings",
       "description": "Adjust hotkeys, transcription provider, API keys, and more.",
+      "hotkey": {
+        "title": "Global Hotkey",
+        "triggerKey": "Trigger Key",
+        "triggerKeyPlaceholder": "Select a key",
+        "triggerKeyOption": {
+          "right-alt": "Right Alt",
+          "left-alt": "Left Alt",
+          "right-control": "Right Ctrl",
+          "left-control": "Left Ctrl",
+          "right-shift": "Right Shift",
+          "left-shift": "Left Shift"
+        },
+        "triggerMode": "Trigger Mode",
+        "triggerModeHold": "Push-to-talk (Hold)",
+        "triggerModeToggle": "Tap to start / stop (Toggle)",
+        "save": "Save",
+        "reset": "Reset",
+        "saveSuccess": "✓ Saved"
+      },
       "apiKey": {
         "title": "API Key",
         "providerLabel": "Provider",

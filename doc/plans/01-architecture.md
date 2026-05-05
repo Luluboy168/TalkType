@@ -1,7 +1,7 @@
 # 系統架構
 
-> **狀態**：Draft v1（M1 + M2 + M3 IPC contract 已落地、M6 plan 經 challenger refine）
-> **最後更新**：2026-05-04
+> **狀態**：Draft v1（M1 + M2 + M3 IPC contract 已落地、M4 chunk 0 deps + types + IPC contract 已落地、M4 chunk 3 settings.rs + voice flow store 已落地、M6 plan 經 challenger refine）
+> **最後更新**：2026-05-05
 
 ## 高層架構圖
 
@@ -115,17 +115,17 @@
 | `test_provider_connection` | transcription / llm_polish (M3 + M6) | 1-2s 內測試 API key + 網路；M3 ship Groq、M6 extend 4 provider |
 | `clear_recording_buffer` | audio_recorder (M3) | 清 `wav_buffer`，避免 RAM 漏（M2 retro #3） |
 | `polish_text` | llm_polish (M6) | Rust-side fetch 4 provider；API key 不過 IPC（Q1 (a)） |
-| `paste_text` | clipboard_paste | 把 text 放剪貼簿 + 模擬 Ctrl+V |
-| `copy_to_clipboard` | clipboard_paste | 純複製 |
-| `capture_target_window` | clipboard_paste | Windows-only：記下 paste 目標 HWND |
-| `update_hotkey_config` | hotkey_listener | 套新熱鍵 |
-| `start_hotkey_recording` | hotkey_listener | 進入熱鍵錄製模式 |
-| `cancel_hotkey_recording` | hotkey_listener | 取消熱鍵錄製 |
+| `paste_text` | clipboard_paste (M4) | 7-step Windows pipeline：modifier release → IME composition complete → AttachThreadInput + SetForegroundWindow（檢查回值、失敗 emit `paste:focus-restore-failed`）→ SendInput Ctrl+V。`spawn_blocking + STA` 安全處理 arboard |
+| `copy_to_clipboard` | clipboard_paste (M4) | 純 set；同樣 `spawn_blocking + STA` |
+| `capture_target_window` | clipboard_paste (M4) | Windows-only：`GetForegroundWindow()` 存 HWND 進 `FocusState` |
+| `update_hotkey_config` | hotkey_listener (M4) | 套新熱鍵；走 settings.rs (M4 chunk 3) 統一通道、broadcast `settings:updated` |
+| `start_hotkey_recording` | hotkey_listener (M4) | Phase 1 stub（roadmap line 302「不做 custom recording」）→ return `Err(NotImplemented)`、UI 不顯示這 button |
+| `cancel_hotkey_recording` | hotkey_listener (M4) | 同 stub |
 | `mute_system_audio` / `restore_system_audio` | audio_control | WASAPI mute |
 | `play_start_sound` / `play_stop_sound` / `play_error_sound` | sound_feedback | 音效 |
 | `set_credential` / `delete_credential` / `has_credential` | credentials (M3) | API key 存進 / 刪除 / 檢查存在於 Windows Credential Vault；frontend 拿不到 key 內容（`get_credential` 是 `pub(crate)` 的 Rust-only function、永不暴露給 IPC，invariant #1） |
 | `get_credential_preview` | credentials (M3) | 回傳 masked preview（`"gsk_aBc…XyZ1"`，前 7 + 後 4 char 中間 `…`）讓 user 識別目前儲存的是哪把 key；masking 在 Rust 內完成、full key 不過 IPC、invariant #1 維持 |
-| `get_settings` / `update_settings` | (Rust state) | 設定統一在 Rust |
+| `get_settings` / `update_settings` | settings (M4 chunk 3) | Rust-owned `SettingsState`；`update_settings` 接 `SettingsPatch`（sparse，每欄位 `Option<...>`）、寫 `tauri-plugin-store` JSON、hot-swap `HotkeyListenerState`、broadcast `settings:updated` 給雙視窗 |
 | `get_history_paged` / `add_history` / `delete_history` | database | SQLite 操作 |
 | `get_vocabulary` / `add_vocabulary` / `update_vocabulary` / `delete_vocabulary` | database | 詞彙操作 |
 | `download_whisper_model` | transcription_local | 下載本地 whisper.cpp 模型 |
@@ -138,13 +138,14 @@
 | Event | Source | Payload |
 |---|---|---|
 | `ipc:pong` | lib.rs (M1) | `PongPayload { source: string, timestampMs: number }` — 由 `ping` command 全域 emit |
-| `hotkey:pressed` | hotkey_listener | `HotkeyEventPayload { mode, action }` |
-| `hotkey:released` | hotkey_listener | `HotkeyEventPayload` |
-| `hotkey:toggled` | hotkey_listener | `HotkeyEventPayload` |
-| `hotkey:error` | hotkey_listener | `{ error, message }` |
-| `hotkey:recording-captured` | hotkey_listener | `{ keycode, modifiers }` |
-| `hotkey:recording-rejected` | hotkey_listener | `{ reason }` |
-| `escape:pressed` | hotkey_listener | `()` |
+| `hotkey:pressed` | hotkey_listener (M4) | `HotkeyEventPayload { triggerMode, action: 'pressed' }` — Hold mode key down |
+| `hotkey:released` | hotkey_listener (M4) | `HotkeyEventPayload { triggerMode, action: 'released' }` — Hold mode key up |
+| `hotkey:toggled` | hotkey_listener (M4) | `HotkeyEventPayload { triggerMode: 'toggle', action: 'toggled-on' \| 'toggled-off' }` — Toggle mode XOR |
+| `hotkey:error` | hotkey_listener | `{ error, message }`（Phase 2 — Phase 1 不暴露） |
+| `hotkey:recording-captured` | hotkey_listener | `{ keycode, modifiers }`（Phase 2 — Phase 1 不暴露） |
+| `hotkey:recording-rejected` | hotkey_listener | `{ reason }`（Phase 2 — Phase 1 不暴露） |
+| `escape:pressed` | hotkey_listener (M4) | `()` — ESC during recording → cancel without paste |
+| `paste:focus-restore-failed` | clipboard_paste (M4) | `PasteFocusRestoreFailedPayload { hwnd, lastErrorCode, message }` — `SetForegroundWindow` 失敗時、文字仍在剪貼簿、UI 顯示 friendly「請手動 Ctrl+V」fallback |
 | `audio:waveform` | audio_recorder (M2) | `WaveformPayload { levels: [f32; 6] }` ~60 fps（每 16 ms 一次）— 6 個正規化 FFT magnitude（Hann window + bins `[9, 4, 1, 2, 6, 12]`、`normalize_db(-100, -20)`） |
 | `audio:preview-level` | audio_recorder (M2) | `AudioPreviewLevelPayload { level: f32 }` ~33 fps（每 30 ms 一次）— RMS 振幅 `[0.0, 1.0]` |
 | `audio:recording-aborted` | audio_recorder (M3) | `RecordingAbortedPayload { reason: 'max_size' \| 'mic_unplug' \| ..., bytesRecorded }` — 達 `MAX_WAV_BYTES` 或裝置斷線時自動觸發 stop_recording 並 emit |
@@ -153,7 +154,7 @@
 | `transcription:progress` | transcription/local (M7) | `{ percent: f32 }` (whisper.cpp) |
 | `model:download-progress` | transcription/local (M7) | `{ modelId, downloaded, total }` |
 | `polish:failed-fallback` | llm_polish (M6) | `PolishFallbackPayload { reason, providerId }` — polish 失敗時、fallback to raw 並通知 HUD 顯示 warning icon |
-| `settings:updated` | (lib.rs Rust state) | `Settings` snapshot |
+| `settings:updated` | settings (M4 chunk 3) | `Settings` snapshot — 由 `SettingsState::update` 在每次 `update_settings` 後 broadcast；雙視窗 `useSettingsStore`（M8）listen 後 invalidate cache |
 | `history:added` | database | `TranscriptionRecord` |
 | `vocabulary:changed` | database | `()` (frontend re-fetch) |
 

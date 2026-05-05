@@ -25,6 +25,17 @@ export const HOTKEY_RECORDING_CAPTURED = "hotkey:recording-captured" as const;
 export const HOTKEY_RECORDING_REJECTED = "hotkey:recording-rejected" as const;
 export const ESCAPE_PRESSED = "escape:pressed" as const;
 
+// ─── M4: clipboard paste ───────────────────────────────────────────────────
+
+/**
+ * Emitted by `clipboard_paste` (M4 chunk 2) when `SetForegroundWindow` fails
+ * during the paste pipeline (typically Windows 11 anti-flash policy refusing
+ * to hand focus back). Text is still on the clipboard at this point — the
+ * HUD shows a friendly "請手動 Ctrl+V" fallback. See `PasteFocusRestoreFailedPayload`
+ * in `src/types/events.ts`.
+ */
+export const PASTE_FOCUS_RESTORE_FAILED = "paste:focus-restore-failed" as const;
+
 // ─── M2: audio recorder ────────────────────────────────────────────────────
 
 export const AUDIO_WAVEFORM = "audio:waveform" as const;
@@ -69,6 +80,7 @@ export const EVENT_NAMES = {
   HOTKEY_RECORDING_CAPTURED,
   HOTKEY_RECORDING_REJECTED,
   ESCAPE_PRESSED,
+  PASTE_FOCUS_RESTORE_FAILED,
   AUDIO_WAVEFORM,
   AUDIO_PREVIEW_LEVEL,
   AUDIO_RECORDING_ABORTED,

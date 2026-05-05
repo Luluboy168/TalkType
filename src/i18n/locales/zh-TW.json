@@ -63,6 +63,25 @@
     "settings": {
       "heading": "設定",
       "description": "調整熱鍵、轉錄供應商、API 金鑰與其他偏好。",
+      "hotkey": {
+        "title": "全域熱鍵",
+        "triggerKey": "觸發按鍵",
+        "triggerKeyPlaceholder": "選擇按鍵",
+        "triggerKeyOption": {
+          "right-alt": "右 Alt",
+          "left-alt": "左 Alt",
+          "right-control": "右 Ctrl",
+          "left-control": "左 Ctrl",
+          "right-shift": "右 Shift",
+          "left-shift": "左 Shift"
+        },
+        "triggerMode": "觸發模式",
+        "triggerModeHold": "按住說話（Hold）",
+        "triggerModeToggle": "點一下開始 / 結束（Toggle）",
+        "save": "儲存",
+        "reset": "還原",
+        "saveSuccess": "✓ 已儲存"
+      },
       "apiKey": {
         "title": "API 金鑰",
         "providerLabel": "供應商",

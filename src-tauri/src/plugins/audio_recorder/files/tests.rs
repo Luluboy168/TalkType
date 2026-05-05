@@ -48,7 +48,7 @@ fn _all_invalid_ids() -> Vec<String> {
         "550e8400-e29b-41d4-a716-44665544000".to_string(), // missing 1 char
         "550e8400-e29b-41d4-a716-4466554400000".to_string(), // extra char
         // off-length (undashed)
-        "550e8400e29b41d4a71644665544000".to_string(),  // 31 hex
+        "550e8400e29b41d4a71644665544000".to_string(), // 31 hex
         "550e8400e29b41d4a7164466554400000".to_string(), // 33 hex
         // non-hex
         "550e8400-e29b-41d4-a716-44665544zzzz".to_string(),
@@ -182,7 +182,10 @@ fn cleanup_one_day_deletes_old_files_only() {
     std::fs::write(&path, b"fresh").expect("write");
 
     let deleted = cleanup_old_recordings_in_dir(dir.path(), 1).expect("cleanup");
-    assert!(deleted.is_empty(), "fresh file should survive 1-day cleanup");
+    assert!(
+        deleted.is_empty(),
+        "fresh file should survive 1-day cleanup"
+    );
     assert!(path.exists());
 }
 

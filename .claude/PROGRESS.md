@@ -6,21 +6,16 @@
 ## 現在在哪
 
 - **Phase**：Phase 1 — OSS MVP
-- **進度**：M0 ✅ Done（2026-05-02）／ M1 ✅ Done（2026-05-02、PR #3 merged）／ M2 ✅ Done（2026-05-03、PR #4 merged）／ M3 ✅ Done（2026-05-04、plan refinements PR #5 + impl PR #6 merged）／ M4 📋 Planned next
+- **進度**：M0 ✅ Done（2026-05-02）／ M1 ✅ Done（2026-05-02、PR #3 merged）／ M2 ✅ Done（2026-05-03、PR #4 merged）／ M3 ✅ Done（2026-05-04、plan refinements PR #5 + impl PR #6 merged）／ **M4 ✅ Done**（2026-05-05、acceptance 過、本 worktree branch `claude/m4-hotkey-paste` 等 push + PR）／ M5 📋 Planned next
 - **正式 milestone 表**：[doc/plans/02-implementation-roadmap.md](../doc/plans/02-implementation-roadmap.md#進度-dashboard)
-- **GitHub**：[Luluboy168/TalkType](https://github.com/Luluboy168/TalkType)、main 已含 M0 + M1 + M2 + M3 完整實作（PR #1 + #3 + #4 + #5 + #6 merged）
+- **GitHub**：[Luluboy168/TalkType](https://github.com/Luluboy168/TalkType)、main 已含 M0 + M1 + M2 + M3 完整實作（PR #1 + #3 + #4 + #5 + #6 merged）；M4 在 `claude/m4-hotkey-paste` branch acceptance 通過、user 開 PR 後 merge
 
-## 下個 session 接手 SOP（M4 開工前必做）
+## 下個 session 接手 SOP（M5 / M4 PR merge 後）
 
-1. **Branch 切換**：當前 worktree 在 stale 的 `claude/m3-cloud-transcription` 分支（已 merged）。新 session 開始時：
-   ```bash
-   git fetch origin
-   git checkout -b claude/m4-hotkey-paste origin/main
-   ```
-   舊 branch 可選刪：`git branch -d claude/m3-cloud-transcription` + `git push origin --delete claude/m3-cloud-transcription`
-2. **User 待辦**：rotate Groq API key（chat history 出現過、視為已洩漏） — 進 [console.groq.com/keys](https://console.groq.com/keys) 刪舊生新、Settings 改用新的
-3. **Plan-time challenger 必跑**（CLAUDE.md item #5）：M4 開工前同 message 平行 dispatch 一個 challenger 讀 roadmap M4 + reference SayIt hotkey_listener 1566-line 教訓，列出 perf / UX / OS-native edge cases 給主 session
-4. **Retro challenger（可選）**：M3 退場前可考慮跑一次、findings 進 IDEAS；但 M3 已有 Q1-Q5 + plan-time challenger + 4 reviewer subagents 重重把關、retro ROI 較低、可省
+1. **User 收尾**：在 `claude/m4-hotkey-paste` branch 跑 `git push -u origin claude/m4-hotkey-paste` + `gh pr create` → CI 過 → merge
+2. **M4 merge 後 start M5**（HUD overlay 完成、4 個 visual states + ARIA + reduced-motion）
+3. **M5 開工前**（同 M4 模式）：plan-time challenger 必跑、讀 SayIt `NotchHud.vue` 861-line 教訓 + `prefers-reduced-motion` 缺口
+4. **M5 設計重點**：useVoiceFlowStore 已 emit 4 logical states（idle/recording/transcribing/success/error）、HUD 只負責 visual binding；M5 加 6-bar waveform 接 `audio:waveform` event（M2 已 emit 60fps）、spinner、success ✓ icon、error ✗ icon、auto-hide timers（success 1s、error 3s、recording 持續顯示）；HUD `WS_EX_NOACTIVATE`（M4 chunk 2 已加）保證 paste target 不被搶 focus
 
 ## 最近的 session
 
@@ -30,6 +25,7 @@
 | [2026-05-02](sessions/2026-05-02-m1-dual-window.md) | M1 Dual-window IPC + tray + single-instance | ✅ M1 done、3 chunks 落地、static checks all green、Tauri dev build smoke pass |
 | [2026-05-03](sessions/2026-05-03-m2-audio-recorder.md) | M2 Audio Recorder Pipeline (cpal + hound + rustfft) | ✅ M2 done、3 chunks 落地、27 cargo tests pass、Settings mic picker + Dashboard record-test card 整合、static checks all green |
 | [2026-05-04](sessions/2026-05-04-m3-cloud-transcription.md) | M3 Cloud Transcription (Groq Whisper + credentials + test connection) | ✅ M3 done、4 chunks 落地（retro 收尾 + credentials + transcription + test+UI+docs）、94 cargo tests pass、Settings 測試連線 + Dashboard 測試轉錄、static checks all green |
+| [2026-05-05](sessions/2026-05-05-m4-hotkey-paste.md) | M4 Global Hotkey + Paste (SetWindowsHookExW + arboard STA + AltGr suppression + modifier residue + IME complete + 7-step paste pipeline) | ✅ M4 done、5 chunks + 2 reviewers + paste.rs split + 2 acceptance fixes（issue 1 keystroke suppression + issue 2 v2 parallel transcribes + session counter + paste serialization）；157 cargo tests + 16 vitest pass、acceptance 通過 |
 
 ## Memory file 結構
 

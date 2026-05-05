@@ -1,7 +1,7 @@
 # 實作 Roadmap
 
-> **狀態**：Draft v1（M0–M3 done、M6 plan 經 challenger refine）
-> **最後更新**：2026-05-04
+> **狀態**：Draft v1（M0–M3 done、M4 chunk 0 deps + types + IPC contract 已落地、M4 chunk 3 settings.rs + voice flow store 已落地、M4 chunk 4 useSettingsStore + Hotkey UI section + 13-condition manual acceptance SOP 已落地、M6 plan 經 challenger refine）
+> **最後更新**：2026-05-05
 
 依 milestone 順序拆解 Phase 1 全部任務。每個 milestone 給：deliverable、tasks、acceptance criteria、預估時間、依賴。
 
@@ -13,7 +13,7 @@
 | M1：基礎 IPC + 雙視窗 | ✅ Done | 2026-05-02 | 2026-05-02 |
 | M2：錄音 pipeline (Rust) | ✅ Done | 2026-05-03 | 2026-05-03 |
 | M3：Cloud transcription | ✅ Done | 2026-05-04 | 2026-05-04 |
-| M4：全域熱鍵 + paste | 📋 Planned | TBD | TBD |
+| M4：全域熱鍵 + paste | ✅ Done | 2026-05-05 | 2026-05-05 |
 | M5：HUD overlay | 📋 Planned | TBD | TBD |
 | M6：LLM polish 多 provider | 📋 Planned | TBD | TBD |
 | M7：Local whisper.cpp | 📋 Planned | TBD | TBD |

@@ -35,9 +35,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use tauri::{AppHandle, Emitter};
 
 use super::error::AudioRecorderError;
-use super::events::{
-    emit_mic_safety_warning, emit_recording_aborted, recording_aborted_reason,
-};
+use super::events::{emit_mic_safety_warning, emit_recording_aborted, recording_aborted_reason};
 use super::stream::{
     determine_input_config, dispatch_sample_format, select_input_device, StartAck,
 };

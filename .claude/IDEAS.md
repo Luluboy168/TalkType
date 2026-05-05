@@ -99,6 +99,34 @@
 - **`::-ms-reveal` CSS 從 scoped 搬 global**：M3 polish 把雙 password reveal icon 修在 `SettingsApiKeySection.vue` 的 `<style scoped>`。等 M9 polish 順手把 rule 搬進 `src/assets/index.css` `@layer base`、未來任何新 password input 自動受惠。**搬時刪掉 SettingsApiKeySection.vue 的 scoped 那塊**避免重複。
 - **Real-Groq smoke test under `--features` flag**：本次 session user 提案把 key 放 `.env.local` 給 automated tests 用。當下決定不做（wiremock 31 cases 已涵蓋、real-Groq 是 manual job），但**未來如果想加「Groq API contract 沒改」regression test**：用 `cargo test --features real-groq-smoke` gate、key 從 `GROQ_API_KEY` env var 讀、CI **不**跑、本地 dogfood 才跑。M9 polish candidate（評估 ROI）。
 
+## M4 plan-time challenger P2（2026-05-05 — 不在 M4 scope、留下次）
+
+> 由 M4 開工前 plan-time challenger subagent 找出、main session 對照 plan 後判定優先級。P0 與 P1 已落實在 M4 chunks（修計畫不修 code）；以下 P2 不阻擋 M4 ship、但是 M5 / M9 / Phase 2 候選。
+
+- **多螢幕 + DPI 縮放下 HUD 位置（M5 owns）**：HUD x=center y=50 在 mixed-DPI（4K 主 + 1080p 副）只 cover primary monitor、user 在 secondary monitor 工作會看不到 HUD — 但 paste target 判斷靠 `GetForegroundWindow()`、不依賴 HUD 位置、所以 paste 本身沒 bug。M5 HUD overlay 完成時順手做 multi-monitor + DPI-aware positioning。
+- **藍牙鍵盤 down/up 延遲對 double-tap detection（M5 dogfood）**：藍牙 keyboard 透過 LL hook 收到 batched events、350ms double-tap window 在實機可能不夠（藍牙延遲可達 200-300ms）。M5 dogfood 期收 telemetry 後 tune 到 500ms 或變成 settings。
+- **Hook log keystroke leakage（M9 polish）**：M4 不接 Sentry（Phase 2 才接），但 chunk 1 implementer 若 `println!` debug 印具體 keycode、user 輸入密碼框時可能 leak 進 dev console。M9 audit `hotkey_listener` 所有 `println!` / `eprintln!`、確保只 log「triggered」+ summary、不印具體 vk / keycode / modifier。Phase 2 接 Sentry 時尤其重要（breadcrumb leakage）。
+- **`SetForegroundWindow` 跨 virtual desktop 切換語意（M5 dogfood）**：user 按熱鍵時 target 在 virtual desktop A、轉錄期間 user 切到 desktop B、paste 時 target HWND 還在 A。`SetForegroundWindow` 行為取決於 Windows build（部分 build 自動切 desktop、部分拒絕）。M5 dogfood 觀察是否要 fall back 到 emit `paste:focus-restore-failed` event。
+- **`AttachThreadInput` thread id 在 user 切視窗 race（M5 dogfood）**：`capture_target_window` 在熱鍵 down 時 capture HWND、user 在錄音中切到別 window、paste 時 attach 的是舊 HWND。SayIt 接受「user-intent locked at hotkey-press time」設計。M5 dogfood 看 user feedback 是否要改 paste-time re-capture（trade-off：re-capture 可能撞到 HUD 自己 vs 鎖在熱鍵時 user 預期）。
+- **Antivirus / EDR 對 `SetWindowsHookExW(WH_KEYBOARD_LL)` 的反應（Phase 2 distribution）**：keyloggers 用同 API、企業 EDR（CrowdStrike / SentinelOne / Defender for Endpoint）會把全鍵盤 hook 標 alert / block。M4 不能 fix；Phase 2 distribution doc 加「企業環境可能誤判」警語、考慮 v0.2 加 code-signing 後 enroll Microsoft SmartScreen reputation。
+
+## M4 chunks 1+2 reviewer findings（2026-05-05 — P1 #1+#3 已修、其餘留下次）
+
+> 由 M4 chunks 1+2 完成後的獨立 code reviewer subagent 找出。P1 #1 (TaskPanic mislabel) 與 P1 #3 (SetWindowLongPtrW return ignored) 立即修了；P1 #2、P1 #4、P2s 留以下：
+
+- **`paste.rs` 768 LOC > 500 軟性 budget — split into `paste/{commands, com, attach, modifiers, ime, input}.rs`（M4 chunk 4 後做、不阻擋 ship）**：CLAUDE.md「檔案大小」軟規則。實作完整 + 充分測試後再拆比較不會 churn。Chunk 4 完成 manual acceptance 後做一次 focused refactor commit。
+- **`OnceLock<HookContext>` 阻擋 process lifetime 內任何 re-install（Phase 2 polish）**：`hotkey_listener/windows.rs` 用 `OnceLock` 存 `HookContext`、`shutdown` drop `HookHandle` 但**沒清** `OnceLock`。Phase 1 single-instance 不會 re-install 不影響、但 Phase 2 dev hot-reload / 測試 harness 需要 re-install 時會 reject。考慮換 `static SHARED_CTX: Mutex<Option<HookContext>>` 支援 `take()` on shutdown。
+- **Slow-hook diagnostic threshold 50ms 在 dev mode 可能噴 log（M5 dogfood）**：`hotkey_listener/windows.rs:347` 警告 `app.emit > 50ms`。Vue HMR 期間 webview 可能 hung、每個 keystroke 觸發。M5 dogfood 看 log frequency；若太多改 200ms threshold 或加 rate-limit `AtomicU64 last_warn_ts`。
+- **`apply_event` 回 `Vec<HotkeyEvent>` 但 Phase 1 永遠 0 或 1 個（micro-opt 候選）**：`hotkey_listener/shared.rs:145`。Phase 2 evaluate 改 `Option<HotkeyEvent>` 或 `SmallVec<[_; 1]>`。Trivial、defer。
+- **`hook_proc` 尾端有一個 wasted atomic load（trivial）**：`hotkey_listener/windows.rs:404` `let _ = state.is_pressed.load(...)` 是 reserved-for-future tracing comment、目前是浪費的 atomic load。下次 touch 該檔時刪掉或實際用。
+
+## M4 chunk 3 reviewer findings（2026-05-05 — 0 P0 / 0 P1、僅 P2）
+
+> 由 M4 chunk 3 完成後的獨立 code reviewer subagent 找出。chunk 3 settings.rs + useVoiceFlowStore + lib.rs wiring 全 pass、CLAUDE.md 全合規、只有 2 個 P2：
+
+- **Async listener registration race in `useVoiceFlowStore.init()`（M5 owns）**：`useVoiceFlowStore.ts:206-241` 用 `void listenToEvent(...).then(unlisten => unlistenFns.push(unlisten))`。`listenToEvent` 是 async 回 Promise、events fired between `init()` 呼叫與 Promise resolve 之間會丟失。Phase 1 HUD bootstrap 比 user reflex 快、不會踩；M5 加 HUD visual states 時 consider 改 `init()` 回 Promise + await all `listen` registrations 才宣告 ready。
+- **`PASTE_FOCUS_RESTORE_FAILED` 已 active state collision（M5 owns）**：`useVoiceFlowStore.ts:230-241` 若此 event 在 `transcribing` 中發 (極少見的 race：paste 失敗剛好撞上下一個 HOTKEY_PRESSED 開新 flow)，會把已 active 的新 flow state 清成 `error`。Phase 1 paste ordering 幾乎不可能踩；M5 HUD 擁有 visual state 時要處理 collision (e.g. only transition if status === 'recording'/'transcribing' for THIS paste cycle)。
+
 ## Phase 2 / 後期想法
 
 - **macOS dev setup**：目前 doc 只 describe 設計，沒實機跑過。Phase 2 啟動時要做 spike。

@@ -14,6 +14,24 @@
 //     `test_provider_connection` (Groq `/models` GET) so the Settings page
 //     can verify a freshly-saved key works without burning a transcription
 //     quota slot. Future M6 extends to other 3 providers.
+//   - M4 chunk 1 (hotkey_listener) — wires `HotkeyListenerState` +
+//     3 commands (`update_hotkey_config` + 2 Phase-2 stubs). The setup
+//     hook installs `SetWindowsHookExW(WH_KEYBOARD_LL)` with the default
+//     `HotkeyConfig` (RightAlt + Hold); chunk 3's `settings.rs` will
+//     replace that with a persisted config. `RunEvent::Exit` posts
+//     WM_QUIT + joins the listener thread.
+//   - M4 chunk 2 (clipboard_paste) — wires `FocusState` + 3 commands
+//     (`capture_target_window` / `paste_text` / `copy_to_clipboard`).
+//     The setup hook applies `WS_EX_NOACTIVATE` to the HUD post-creation
+//     so paste's `SetForegroundWindow` doesn't accidentally hand focus
+//     back to the HUD instead of the user's target app.
+//   - M4 chunk 3 (settings.rs + voice flow store) — registers
+//     `tauri-plugin-store`, loads `SettingsState` from
+//     `app_data_dir/settings.json` in setup (or persists defaults on first
+//     run), wires `get_settings` / `update_settings` commands, and uses
+//     the persisted `HotkeyConfig` to install the keyboard hook so the
+//     user's saved hotkey takes effect at boot rather than the hardcoded
+//     RightAlt+Hold default.
 //
 // Window layout: HUD (`main`, transparent overlay) + Dashboard (`main-window`).
 // Tray icon with "Open Dashboard" + "Quit" menu items, left-click focuses
@@ -21,11 +39,12 @@
 // Dashboard close-request is intercepted -> hide instead of destroy (only tray
 // "Quit" exits).
 //
-// Future modules (settings.rs, additional plugins) will be added in subsequent
-// milestones; this file aims for the ~300-line orchestrator budget per
+// Future modules (additional plugins) will be added in subsequent milestones;
+// this file aims for the ~300-line orchestrator budget per
 // doc/plans/03-rust-modules.md.
 
 pub mod plugins;
+pub mod settings;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -34,17 +53,13 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, WindowEvent,
 };
 
-use plugins::{audio_recorder, credentials, transcription};
+use plugins::{audio_recorder, clipboard_paste, credentials, hotkey_listener, transcription};
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
-// HUD_LABEL is referenced from M5 onwards (HudOverlay show/hide). Keep it
-// declared here as the source-of-truth window label even though M1 doesn't
-// touch the HUD programmatically.
-#[allow(dead_code)]
 const HUD_LABEL: &str = "main";
 const DASHBOARD_LABEL: &str = "main-window";
 const EVENT_PONG: &str = "ipc:pong";
@@ -151,11 +166,23 @@ pub fn run() {
         }));
     }
 
-    builder
+    let app = builder
         .plugin(tauri_plugin_opener::init())
+        // M4 chunk 3: persistent JSON store for `Settings`. Must register
+        // before any `setup` callback that reads / writes the store —
+        // `SettingsState::load_or_default` calls `app.store(...)` which
+        // requires this plugin's StoreState in the resource table.
+        .plugin(tauri_plugin_store::Builder::default().build())
         .manage(audio_recorder::AudioRecorderState::new())
         .manage(audio_recorder::AudioPreviewState::new())
         .manage(credentials::CredentialsState::new())
+        // M4 chunk 1: hotkey listener state. The setup callback below installs
+        // the OS-level hook with the default config; chunk 3's `settings.rs`
+        // will swap that for a persisted config in a follow-up commit.
+        .manage(hotkey_listener::HotkeyListenerState::new())
+        // M4 chunk 2: paste pipeline state (target HWND captured at hotkey
+        // press time so a later `paste_text` can restore focus).
+        .manage(clipboard_paste::FocusState::new())
         .setup(|app| {
             let handle = app.handle().clone();
             build_tray_icon(&handle)?;
@@ -163,6 +190,33 @@ pub fn run() {
             // can fail on TLS init). Doing it here lets the error propagate
             // through the `setup` Result chain.
             app.manage(transcription::TranscriptionState::new()?);
+
+            // M4 chunk 2: the HUD must not be considered for OS focus chain
+            // — otherwise paste's `SetForegroundWindow(target_hwnd)` can be
+            // fooled into refocusing the HUD instead of the user's target.
+            // `tauri.conf.json` doesn't expose `WS_EX_NOACTIVATE`, so we set
+            // it post-creation here. No-op on non-Windows.
+            if let Some(hud) = app.get_webview_window(HUD_LABEL) {
+                if let Err(e) = clipboard_paste::apply_hud_no_activate_style(&hud) {
+                    eprintln!("[lib] apply_hud_no_activate_style failed: {e}");
+                }
+            }
+
+            // M4 chunk 3: load the persisted `Settings` from
+            // `app_data_dir/settings.json` (or write defaults on first run).
+            // This must happen BEFORE `HotkeyListenerState::install` so the
+            // OS hook starts with the user's saved hotkey rather than
+            // `RightAlt+Hold` and only later swaps via `update_hotkey_config`.
+            app.manage(settings::SettingsState::load_or_default(app.handle())?);
+            let initial_hotkey = app.state::<settings::SettingsState>().snapshot()?.hotkey;
+
+            // M4 chunk 1: install the global keyboard hook with the persisted
+            // config from `SettingsState`. Hot updates afterward go through
+            // `settings::update_settings` which forwards to
+            // `HotkeyListenerState::apply_config` (atomics swap, no reinstall).
+            app.state::<hotkey_listener::HotkeyListenerState>()
+                .install(handle, initial_hotkey)?;
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -210,7 +264,43 @@ pub fn run() {
             // Groq; M6 will extend the same command to OpenAI / Anthropic
             // / Gemini by adding match arms in `transcription/health.rs`.
             transcription::health::test_provider_connection,
+            // M4 chunk 1: hotkey listener. `update_hotkey_config` is the
+            // frontend hot-swap path (Settings UI calls this); the two
+            // recording commands return `NotImplemented` in Phase 1 so the
+            // command surface stays stable while the UI hides the buttons.
+            hotkey_listener::update_hotkey_config,
+            hotkey_listener::start_hotkey_recording,
+            hotkey_listener::cancel_hotkey_recording,
+            // M4 chunk 2: clipboard paste. The Pinia voice-flow store calls
+            // `capture_target_window` on hotkey-down, then `paste_text` after
+            // transcription completes. `copy_to_clipboard` is exposed for
+            // future Dashboard "copy" affordances (M8 history view).
+            clipboard_paste::capture_target_window,
+            clipboard_paste::paste_text,
+            clipboard_paste::copy_to_clipboard,
+            // M4 chunk 3: persistent settings. `get_settings` is the once-
+            // on-boot snapshot; `update_settings` is the patch path that
+            // also hot-swaps `HotkeyListenerState` and broadcasts
+            // `settings:updated` to both windows.
+            settings::get_settings,
+            settings::update_settings,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Switch from `Builder::run` to `App::run` so we can intercept
+    // `RunEvent::Exit` and tear down OS-level resources cleanly.
+    // Phase 1 wiring: the hotkey listener thread + WH_KEYBOARD_LL hook
+    // (M4 chunk 1). Phase 2 will add audio mute restore and Sentry flush
+    // per `doc/plans/03-rust-modules.md` 8-step shutdown.
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            // Idempotent — safe to call without prior install (the inner
+            // Mutex<Option> is None then), so we don't risk double-shutdown
+            // even on early-error paths.
+            if let Some(state) = app_handle.try_state::<hotkey_listener::HotkeyListenerState>() {
+                state.shutdown();
+            }
+        }
+    });
 }

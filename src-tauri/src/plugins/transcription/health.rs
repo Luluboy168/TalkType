@@ -193,10 +193,7 @@ async fn test_groq_connection_with_url(
             // Groq's `/models` mirrors OpenAI's response shape:
             // `{ "data": [{ "id": "...", ... }, ...] }`. We don't enforce
             // schema strictly — just count entries when present.
-            let model_count = body
-                .get("data")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len());
+            let model_count = body.get("data").and_then(|v| v.as_array()).map(|a| a.len());
             Ok(TestConnectionResult {
                 ok: true,
                 provider: provider.to_string(),
@@ -279,7 +276,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/openai/v1/models"))
-            .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"error":"Invalid API Key"}"#))
+            .respond_with(
+                ResponseTemplate::new(401).set_body_string(r#"{"error":"Invalid API Key"}"#),
+            )
             .mount(&server)
             .await;
 
@@ -292,7 +291,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/openai/v1/models"))
-            .respond_with(ResponseTemplate::new(403).set_body_string(r#"{"error":"insufficient_scope"}"#))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_string(r#"{"error":"insufficient_scope"}"#),
+            )
             .mount(&server)
             .await;
 

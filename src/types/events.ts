@@ -19,12 +19,55 @@ export interface PongPayload {
   timestampMs: number;
 }
 
-// ─── M4: hotkey listener (placeholders — populated in M4) ──────────────────
+// ─── M4: hotkey listener ───────────────────────────────────────────────────
 
-export type HotkeyEventPayload = unknown;
+/**
+ * Payload of `hotkey:pressed` / `hotkey:released` / `hotkey:toggled` events
+ * emitted by `hotkey_listener` (M4). The Rust side derives `action` from the
+ * trigger mode + raw key event:
+ *   * Hold mode    → `pressed` (key down)  /  `released` (key up)
+ *   * Toggle mode  → `toggled-on`          /  `toggled-off`  (XOR on the
+ *                                            configured trigger key)
+ *
+ * Frontend `useVoiceFlowStore` (M4 chunk 3) listens for these and drives the
+ * recording state machine. Hold and Toggle share a payload shape so the same
+ * listener can dispatch — only `triggerMode` + `action` differ.
+ */
+export interface HotkeyEventPayload {
+  /** Active trigger mode at event time. Mirrors `Settings.hotkey.triggerMode`. */
+  triggerMode: "hold" | "toggle";
+  /**
+   * Logical action derived by the Rust hook proc:
+   *   * `pressed` / `released` — only Hold mode
+   *   * `toggled-on` / `toggled-off` — only Toggle mode
+   */
+  action: "pressed" | "released" | "toggled-on" | "toggled-off";
+}
+
+// `hotkey:error` / `hotkey:recording-captured` / `hotkey:recording-rejected`
+// remain placeholders — Phase 1 ships preset-only hotkeys (roadmap line 302
+// "不做 custom recording") so the recording-mode events stay untyped until
+// Phase 2 reactivates that surface.
 export type HotkeyErrorPayload = unknown;
 export type HotkeyRecordingCapturedPayload = unknown;
 export type HotkeyRecordingRejectedPayload = unknown;
+
+/**
+ * Payload of `paste:focus-restore-failed` emitted by `clipboard_paste` (M4
+ * chunk 2) when `SetForegroundWindow` returns FALSE — typically Windows 11
+ * anti-flash policy refusing to hand focus back to a background process.
+ *
+ * The text is still on the clipboard at this point: the HUD shows a friendly
+ * "請手動 Ctrl+V" fallback so the user can complete the paste manually.
+ */
+export interface PasteFocusRestoreFailedPayload {
+  /** Saved foreground HWND (raw isize from `GetForegroundWindow`). */
+  hwnd: number;
+  /** Result of `GetLastError()` immediately after the failed call. */
+  lastErrorCode: number;
+  /** Human-readable diagnostic for the HUD / error panel. */
+  message: string;
+}
 
 // ─── M2: audio recorder ────────────────────────────────────────────────────
 

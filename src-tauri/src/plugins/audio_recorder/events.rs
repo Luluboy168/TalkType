@@ -106,10 +106,7 @@ mod tests {
             bytes_recorded: 25_000_000,
         };
         let json = serde_json::to_string(&p).expect("serialize");
-        assert_eq!(
-            json,
-            "{\"reason\":\"max_size\",\"bytesRecorded\":25000000}"
-        );
+        assert_eq!(json, "{\"reason\":\"max_size\",\"bytesRecorded\":25000000}");
     }
 
     #[test]
