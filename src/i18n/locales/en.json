@@ -18,7 +18,8 @@
     "history": "History",
     "dictionary": "Dictionary",
     "settings": "Settings",
-    "guide": "Guide"
+    "guide": "Guide",
+    "recordingBadge": "Recording"
   },
   "dashboard": {
     "ipcSmoke": {

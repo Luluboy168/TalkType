@@ -14,9 +14,11 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
 
+import HudFlowBadge from "@/components/HudFlowBadge.vue";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarHeader,
@@ -91,5 +93,8 @@ function isActive(item: NavItem): boolean {
         </SidebarGroupContent>
       </SidebarGroup>
     </SidebarContent>
+    <SidebarFooter>
+      <HudFlowBadge />
+    </SidebarFooter>
   </Sidebar>
 </template>
