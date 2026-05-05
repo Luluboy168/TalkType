@@ -29,14 +29,24 @@ app.mount("#app");
 // is stashed on the window so a future hot-reload can call it; in production
 // it never fires (the HUD lives for the entire app lifetime). Errors here
 // are logged rather than thrown — the HUD must mount even if the listeners
-// can't attach (M5 will surface this visibly).
-try {
-  const voiceFlow = useVoiceFlowStore();
-  const cleanup = voiceFlow.init();
-  // Type-side: store cleanup fn on window for HMR safety. Strict-mode
-  // TypeScript doesn't know about ad-hoc window props; cast through unknown.
-  (window as unknown as { __voiceFlowCleanup?: () => void }).__voiceFlowCleanup =
-    cleanup;
-} catch (err) {
-  console.error("[hud] voice flow init failed", err);
-}
+// can't attach (M5 will surface this visibly in M9 polish).
+//
+// **M5 chunk 1**: `init()` is now async (sequential awaits over Tauri's
+// `listen()` instead of fire-and-forget `.then(push)`). We use the
+// `then().catch()` form rather than top-level await so the rest of the
+// module continues evaluating; the cleanup fn lands on `window` after the
+// listeners actually finish registering.
+const voiceFlow = useVoiceFlowStore();
+voiceFlow
+  .init()
+  .then((cleanup) => {
+    // Type-side: store cleanup fn on window for HMR safety. Strict-mode
+    // TypeScript doesn't know about ad-hoc window props; cast through unknown.
+    (
+      window as unknown as { __voiceFlowCleanup?: () => void }
+    ).__voiceFlowCleanup = cleanup;
+  })
+  .catch((err: unknown) => {
+    console.error("[hud] voice flow init failed", err);
+    // Phase 1: log only; M5 doesn't render an init-failure state. M9 polish.
+  });

@@ -1,10 +1,16 @@
-// Unit tests for the voice flow Pinia store (M4 chunk 3).
+// Unit tests for the voice flow Pinia store (M4 chunk 3 + M5 chunk 1).
 //
 // Covers the state machine transitions through `handleStart` / `handleStop` /
-// `handleCancel` with `invoke` mocked. The Tauri event listener wiring
-// (`init`) is left for M4 chunk 4 manual smoke + M5 HUD integration tests
-// because vi.mock on `@tauri-apps/api/event` would mostly assert "the call
-// happened" rather than catching real bugs.
+// `handleCancel` / `dismissError` with `invoke` mocked. M5 chunk 1 adds:
+//   * async `init()` (was sync) — tests now `await store.init()`
+//   * `audio:recording-aborted` listener wiring (size cap / mic unplug)
+//   * `dismissError()` user-driven recovery
+//   * `transitionTo()` emits `voice-flow:state-changed` to Dashboard
+//   * `formatError` pattern matches Rust `FocusRestoreFailed` → friendly hint
+//
+// Listener tests work by capturing the Tauri `listen()` callback for each
+// event and invoking it directly — that's the same pattern useTauriEvents
+// uses everywhere else and avoids fragile real-OS event setup.
 import { setActivePinia, createPinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,13 +20,20 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
-// Also mock `@tauri-apps/api/event` because `useTauriEvents` re-exports
-// `listen` from there, and `init()` would otherwise try to attach real OS
-// event listeners during module import.
+// Capture listen callbacks so tests can invoke them synchronously without
+// needing real OS event plumbing. `emitTo` is also captured so tests can
+// assert cross-window broadcasts. `vi.hoisted` is required because vi.mock
+// factories run BEFORE the file's top-level statements.
+const { listenMock, emitToMock, listenCallbacks } = vi.hoisted(() => ({
+  listenMock: vi.fn(),
+  emitToMock: vi.fn(),
+  listenCallbacks: new Map<string, (event: { payload: unknown }) => void>(),
+}));
+
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: listenMock,
   emit: vi.fn().mockResolvedValue(undefined),
-  emitTo: vi.fn().mockResolvedValue(undefined),
+  emitTo: emitToMock,
 }));
 
 import { invoke } from "@tauri-apps/api/core";
@@ -28,10 +41,42 @@ import { useVoiceFlowStore } from "@/stores/useVoiceFlowStore";
 
 const mockInvoke = vi.mocked(invoke);
 
+/**
+ * Drive the store through a full pipeline up to the recording state by
+ * stubbing out the trio of invokes `handleStart` issues
+ * (position_hud_for_active_monitor + capture_target_window + start_recording).
+ *
+ * Centralized here so the M5 chunk 1 addition of positioning doesn't force
+ * every test to know the new invoke order.
+ */
+function mockHandleStartInvokes(): void {
+  mockInvoke.mockResolvedValueOnce(undefined); // position_hud_for_active_monitor
+  mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
+  mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+}
+
 describe("useVoiceFlowStore", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     mockInvoke.mockReset();
+    listenMock.mockReset();
+    emitToMock.mockReset();
+    listenCallbacks.clear();
+    // Default: each `listen(name, cb)` stashes the callback and returns a
+    // no-op unlisten fn. Tests that need to drive a specific event invoke
+    // `listenCallbacks.get(name)` after `await store.init()`.
+    listenMock.mockImplementation(
+      (
+        name: string,
+        cb: (event: { payload: unknown }) => void,
+      ): Promise<() => void> => {
+        listenCallbacks.set(name, cb);
+        return Promise.resolve(() => {
+          listenCallbacks.delete(name);
+        });
+      },
+    );
+    emitToMock.mockResolvedValue(undefined);
     vi.useFakeTimers();
   });
 
@@ -46,15 +91,18 @@ describe("useVoiceFlowStore", () => {
     expect(store.recordingStartedAtMs).toBeNull();
   });
 
-  it("handleStart from idle invokes capture_target_window + start_recording and transitions to recording", async () => {
-    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
-    mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+  it("handleStart from idle invokes position + capture + start_recording and transitions to recording", async () => {
+    mockHandleStartInvokes();
 
     const store = useVoiceFlowStore();
     await store.handleStart();
 
-    expect(mockInvoke).toHaveBeenNthCalledWith(1, "capture_target_window");
-    expect(mockInvoke).toHaveBeenNthCalledWith(2, "start_recording", {
+    expect(mockInvoke).toHaveBeenNthCalledWith(
+      1,
+      "position_hud_for_active_monitor",
+    );
+    expect(mockInvoke).toHaveBeenNthCalledWith(2, "capture_target_window");
+    expect(mockInvoke).toHaveBeenNthCalledWith(3, "start_recording", {
       deviceName: null,
     });
     expect(store.status).toBe("recording");
@@ -81,8 +129,7 @@ describe("useVoiceFlowStore", () => {
     const store = useVoiceFlowStore();
 
     // Drive through a full pipeline to land in "success".
-    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
-    mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+    mockHandleStartInvokes();
     await store.handleStart();
     mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
     mockInvoke.mockResolvedValueOnce({
@@ -97,12 +144,15 @@ describe("useVoiceFlowStore", () => {
     // Press again BEFORE the 1s success linger expires. Old behavior was
     // a silent no-op; new behavior is a fresh recording.
     mockInvoke.mockClear();
-    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
-    mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+    mockHandleStartInvokes();
     await store.handleStart();
     expect(store.status).toBe("recording");
-    expect(mockInvoke).toHaveBeenNthCalledWith(1, "capture_target_window");
-    expect(mockInvoke).toHaveBeenNthCalledWith(2, "start_recording", {
+    expect(mockInvoke).toHaveBeenNthCalledWith(
+      1,
+      "position_hud_for_active_monitor",
+    );
+    expect(mockInvoke).toHaveBeenNthCalledWith(2, "capture_target_window");
+    expect(mockInvoke).toHaveBeenNthCalledWith(3, "start_recording", {
       deviceName: null,
     });
   });
@@ -116,8 +166,7 @@ describe("useVoiceFlowStore", () => {
     const store = useVoiceFlowStore();
 
     // Get into recording.
-    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window 1
-    mockInvoke.mockResolvedValueOnce(undefined); // start_recording 1
+    mockHandleStartInvokes();
     await store.handleStart();
     expect(store.status).toBe("recording");
 
@@ -129,14 +178,15 @@ describe("useVoiceFlowStore", () => {
     mockInvoke.mockResolvedValueOnce(undefined); // stop_recording 1
     mockInvoke.mockReturnValueOnce(transcribe1); // transcribe_audio 1 (pending)
     const stopPromise = store.handleStop();
-    await Promise.resolve();
-    await Promise.resolve();
+    // Drain microtasks until handleStop reaches the awaiting transcribe1
+    // step. M5 chunk 1's async transitionTo (with internal await emitTo)
+    // adds extra microtask ticks vs M4, so we drain a few more rounds.
+    for (let i = 0; i < 8; i++) await Promise.resolve();
     expect(store.status).toBe("transcribing");
 
     // Press during transcribing — should start a new recording, NOT
     // no-op like the previous (overly-conservative) guard did.
-    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window 2
-    mockInvoke.mockResolvedValueOnce(undefined); // start_recording 2
+    mockHandleStartInvokes();
     await store.handleStart();
     expect(store.status).toBe("recording"); // session 2 took over
 
@@ -159,8 +209,7 @@ describe("useVoiceFlowStore", () => {
     const store = useVoiceFlowStore();
 
     // Set up handleStart first so we're in recording state.
-    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
-    mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+    mockHandleStartInvokes();
     await store.handleStart();
     expect(store.status).toBe("recording");
 
@@ -191,8 +240,7 @@ describe("useVoiceFlowStore", () => {
     const store = useVoiceFlowStore();
 
     // Enter recording state.
-    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
-    mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+    mockHandleStartInvokes();
     await store.handleStart();
     expect(store.status).toBe("recording");
 
@@ -217,12 +265,163 @@ describe("useVoiceFlowStore", () => {
 
   it("transitions to error on invoke failure and auto-reverts to idle after 3s", async () => {
     const store = useVoiceFlowStore();
-    mockInvoke.mockRejectedValueOnce("API key missing for provider groq");
+    // Reject the very first invoke (position_hud_for_active_monitor) — but
+    // because positioning is wrapped in its own try/catch (P1-8), it does
+    // NOT trigger error path. We need to fail capture_target_window instead.
+    mockInvoke.mockResolvedValueOnce(undefined); // position_hud_for_active_monitor (succeeds, decorative)
+    mockInvoke.mockRejectedValueOnce("API key missing for provider groq"); // capture_target_window (proxy for any core failure)
     await store.handleStart();
     expect(store.status).toBe("error");
     expect(store.message).toContain("API key missing");
 
     vi.advanceTimersByTime(3000);
     expect(store.status).toBe("idle");
+  });
+
+  // ─── M5 chunk 1: positioning failure does NOT block recording (P1-8) ────
+
+  it("positioning failure is non-fatal and recording still starts (P1-8)", async () => {
+    const store = useVoiceFlowStore();
+
+    // Simulate Rust position_hud_for_active_monitor failing (e.g. monitor
+    // probe error). Recording should still proceed because positioning is
+    // decorative (HUD stays at last position).
+    mockInvoke.mockRejectedValueOnce("monitor probe failed"); // position
+    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
+    mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+    await store.handleStart();
+    expect(store.status).toBe("recording");
+    expect(store.recordingStartedAtMs).toBeTypeOf("number");
+  });
+
+  // ─── M5 chunk 1: dismissError ────────────────────────────────────────────
+
+  it("dismissError() transitions error → idle", async () => {
+    const store = useVoiceFlowStore();
+    // Drive into error state by failing capture_target_window.
+    mockInvoke.mockResolvedValueOnce(undefined); // position
+    mockInvoke.mockRejectedValueOnce("transcribe failed");
+    await store.handleStart();
+    expect(store.status).toBe("error");
+
+    store.dismissError();
+    expect(store.status).toBe("idle");
+    expect(store.message).toBe("");
+  });
+
+  it("dismissError() is a no-op when status is not error", async () => {
+    const store = useVoiceFlowStore();
+    // status starts as 'idle'
+    expect(store.status).toBe("idle");
+    store.dismissError();
+    expect(store.status).toBe("idle"); // unchanged
+
+    // Drive to recording — dismissError must NOT clobber it.
+    mockHandleStartInvokes();
+    await store.handleStart();
+    expect(store.status).toBe("recording");
+    store.dismissError();
+    expect(store.status).toBe("recording"); // unchanged
+  });
+
+  // ─── M5 chunk 1: audio:recording-aborted listener ────────────────────────
+
+  it("audio:recording-aborted with reason='max_size' triggers error path", async () => {
+    const store = useVoiceFlowStore();
+    const cleanup = await store.init();
+
+    const abortCb = listenCallbacks.get("audio:recording-aborted");
+    expect(abortCb).toBeDefined();
+
+    abortCb!({
+      payload: { reason: "max_size", bytesRecorded: 25_000_000 },
+    });
+
+    expect(store.status).toBe("error");
+    expect(store.message).toContain("錄音超過上限");
+
+    // Auto-revert after 3s.
+    vi.advanceTimersByTime(3000);
+    expect(store.status).toBe("idle");
+
+    cleanup();
+  });
+
+  it("audio:recording-aborted with reason='mic_unplug' triggers error path", async () => {
+    const store = useVoiceFlowStore();
+    const cleanup = await store.init();
+
+    const abortCb = listenCallbacks.get("audio:recording-aborted");
+    expect(abortCb).toBeDefined();
+
+    abortCb!({
+      payload: { reason: "mic_unplug", bytesRecorded: 0 },
+    });
+
+    expect(store.status).toBe("error");
+    expect(store.message).toBe("麥克風已拔除");
+
+    cleanup();
+  });
+
+  // ─── M5 chunk 1: transitionTo emits voice-flow:state-changed (P0-1) ─────
+
+  it("transitionTo emits voice-flow:state-changed via emitTo with source='hud'", async () => {
+    const store = useVoiceFlowStore();
+    mockHandleStartInvokes();
+    await store.handleStart();
+    // After handleStart, transitionTo("recording", "") should have fired.
+
+    // Find the recording-state emit. emitTo is (target, event, payload).
+    const recordingEmit = emitToMock.mock.calls.find(
+      ([_target, _event, payload]) => {
+        const p = payload as { status?: string } | undefined;
+        return p?.status === "recording";
+      },
+    );
+    expect(recordingEmit).toBeDefined();
+    const [target, event, payload] = recordingEmit!;
+    expect(target).toBe("main-window");
+    expect(event).toBe("voice-flow:state-changed");
+    expect(payload).toMatchObject({
+      status: "recording",
+      message: "",
+      source: "hud",
+    });
+  });
+
+  it("emitTo failure does not break the state machine (best-effort)", async () => {
+    emitToMock.mockRejectedValue(new Error("cross-window IPC offline"));
+
+    const store = useVoiceFlowStore();
+    mockHandleStartInvokes();
+    // handleStart should NOT throw even when emitTo fails internally.
+    await expect(store.handleStart()).resolves.toBeUndefined();
+    expect(store.status).toBe("recording");
+  });
+
+  // ─── M5 chunk 1: formatError P0-3 regression ─────────────────────────────
+
+  it("formatError appends '請手動 Ctrl+V' when Rust error mentions FocusRestoreFailed", async () => {
+    const store = useVoiceFlowStore();
+
+    // Drive into error path with a focus-restore Rust-style error string.
+    mockInvoke.mockResolvedValueOnce(undefined); // position
+    mockInvoke.mockRejectedValueOnce(
+      "Focus restore failed (HWND=12345, GLE=0)",
+    );
+    await store.handleStart();
+    expect(store.status).toBe("error");
+    expect(store.message).toContain("請手動 Ctrl+V");
+  });
+
+  it("formatError matches the Rust enum variant name 'FocusRestoreFailed' too", async () => {
+    const store = useVoiceFlowStore();
+
+    mockInvoke.mockResolvedValueOnce(undefined); // position
+    mockInvoke.mockRejectedValueOnce("ClipboardError::FocusRestoreFailed");
+    await store.handleStart();
+    expect(store.status).toBe("error");
+    expect(store.message).toContain("請手動 Ctrl+V");
   });
 });
