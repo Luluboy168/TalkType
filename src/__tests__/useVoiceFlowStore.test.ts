@@ -402,10 +402,25 @@ describe("useVoiceFlowStore", () => {
 
   // ─── M5 chunk 1: formatError P0-3 regression ─────────────────────────────
 
-  it("formatError appends '請手動 Ctrl+V' when Rust error mentions FocusRestoreFailed", async () => {
+  it("formatError appends '請手動 Ctrl+V' for actual Rust Display string", async () => {
+    // The REAL Rust ClipboardError::FocusRestoreFailed Display format —
+    // mirrors src-tauri/src/plugins/clipboard_paste/mod.rs:96.
+    // Chunk 1 reviewer P0 found that original test used a fictional pattern
+    // ("Focus restore failed") that never matches actual Rust output
+    // ("Failed to restore focus to ..."). This is the regression test.
     const store = useVoiceFlowStore();
+    mockInvoke.mockResolvedValueOnce(undefined); // position
+    mockInvoke.mockRejectedValueOnce(
+      "Failed to restore focus to target HWND 0x3039: GetLastError=0",
+    );
+    await store.handleStart();
+    expect(store.status).toBe("error");
+    expect(store.message).toContain("請手動 Ctrl+V");
+  });
 
-    // Drive into error path with a focus-restore Rust-style error string.
+  it("formatError matches legacy 'Focus restore failed' string too (defensive)", async () => {
+    // Belt-and-suspenders for any future Rust rename.
+    const store = useVoiceFlowStore();
     mockInvoke.mockResolvedValueOnce(undefined); // position
     mockInvoke.mockRejectedValueOnce(
       "Focus restore failed (HWND=12345, GLE=0)",
@@ -416,8 +431,8 @@ describe("useVoiceFlowStore", () => {
   });
 
   it("formatError matches the Rust enum variant name 'FocusRestoreFailed' too", async () => {
+    // Defensive — covers debug-format paths or future Tauri serializer changes.
     const store = useVoiceFlowStore();
-
     mockInvoke.mockResolvedValueOnce(undefined); // position
     mockInvoke.mockRejectedValueOnce("ClipboardError::FocusRestoreFailed");
     await store.handleStart();

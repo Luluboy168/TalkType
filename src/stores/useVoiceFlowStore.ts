@@ -334,8 +334,13 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
 
     // P0-3: preserve M4's friendly "請手動 Ctrl+V" hint that was previously
     // appended by the (now-removed) paste:focus-restore-failed listener.
-    // Pattern match Rust ClipboardError::FocusRestoreFailed Display string.
+    // Pattern match Rust `ClipboardError::FocusRestoreFailed` — actual Display
+    // string is `"Failed to restore focus to target HWND {hwnd:#x}: GetLastError={last_error}"`
+    // (see src-tauri/src/plugins/clipboard_paste/mod.rs:96). Chunk 1 reviewer
+    // (P0) caught that the original spec/plan pattern `"Focus restore failed"`
+    // never matched the real Rust output.
     if (
+      raw.startsWith("Failed to restore focus") ||
       raw.startsWith("Focus restore failed") ||
       raw.includes("FocusRestoreFailed")
     ) {
