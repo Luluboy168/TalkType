@@ -1,6 +1,6 @@
 # 實作 Roadmap
 
-> **狀態**：Draft v1（M0–M5 done — M5 HUD overlay 4 visual states + 6-bar waveform + ARIA + reduced-motion + active-monitor positioning + Dashboard sidebar badge 已落地；待 user 跑 14 條 manual acceptance 後 PR merge）
+> **狀態**：Draft v1（M0–M5 done — M5 HUD overlay user acceptance 通過、3 acceptance fixes 已 commit：HUD visible:true、capability set-ignore-cursor-events、user-select:none）
 > **最後更新**：2026-05-05
 
 依 milestone 順序拆解 Phase 1 全部任務。每個 milestone 給：deliverable、tasks、acceptance criteria、預估時間、依賴。
