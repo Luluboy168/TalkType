@@ -6,18 +6,19 @@
 ## 現在在哪
 
 - **Phase**：Phase 1 — OSS MVP
-- **進度**：M0 ✅ Done（2026-05-02）／ M1 ✅ Done（2026-05-02、PR #3 merged）／ M2 ✅ Done（2026-05-03、PR #4 merged）／ M3 ✅ Done（2026-05-04、plan refinements PR #5 + impl PR #6 merged）／ M4 ✅ Done（2026-05-05、acceptance 過、PR #8 merged）／ M5 ✅ Done（2026-05-05、acceptance 過、PR #9 merged）／ **M6 🚧 In progress**（2026-05-06、plan refined、待 user 確認 8 decisions 後 dispatch implementer）
+- **進度**：M0 ✅ Done（2026-05-02）／ M1 ✅ Done（2026-05-02、PR #3 merged）／ M2 ✅ Done（2026-05-03、PR #4 merged）／ M3 ✅ Done（2026-05-04、plan refinements PR #5 + impl PR #6 merged）／ M4 ✅ Done（2026-05-05、acceptance 過、PR #8 merged）／ M5 ✅ Done（2026-05-05、acceptance 過、PR #9 merged）／ **M6 ✅ Done**（2026-05-06、5 chunks 落地、281 cargo + 99 vitest pass、待 user acceptance）
 - **正式 milestone 表**：[doc/plans/02-implementation-roadmap.md](../doc/plans/02-implementation-roadmap.md#進度-dashboard)
-- **GitHub**：[Luluboy168/TalkType](https://github.com/Luluboy168/TalkType)、main 已含 M0–M5 完整實作（PR #1 + #3 + #4 + #5 + #6 + #8 + #9 merged）
+- **GitHub**：[Luluboy168/TalkType](https://github.com/Luluboy168/TalkType)、main 已含 M0–M5 完整實作（PR #1 + #3 + #4 + #5 + #6 + #8 + #9 merged）；M6 worktree branch `claude/silly-spence-3adbd2`、PR 待 user acceptance 後開
 
-## 下個 session 接手 SOP（M6 chunk 0 dispatch）
+## 下個 session 接手 SOP（M7 Local whisper.cpp dispatch）
 
-1. **讀 [`sessions/2026-05-06-m6-llm-polish-kickoff.md`](sessions/2026-05-06-m6-llm-polish-kickoff.md)** — refined M6 spec、6 chunks、8 decisions、33 fold-in findings (F1-F33)。本檔即 implementer 接下來讀的 source-of-truth、超 plans/02 M6 section
-2. **確認 8 decisions resolution**（特別 Decision #7 default polish ON + has_credential gate；Decision #4 Anthropic 404 fallback；Decision #5 success bubble dual-mode warning amber）
-3. **dispatch chunk 0 implementer subagent（Opus）** prompt 用 kickoff log chunk 0 section
-4. **每 chunk 完成 → reviewer subagent**（Opus、`general-purpose`）prompt 用 kickoff log 對應 chunk Reviewer checklist。**chunk 1 (Rust) reviewer critical**：API key invariant 任何 violation 立即 P0
-5. **chunks 3 + 4 reviewer 必跑 Playwright SOP**（CLAUDE.md UI verification rule）
-6. **chunk 5 後 dispatch retro challenger**（CLAUDE.md item #6）：focus Privacy / API key invariant / Typeless 隱私翻車反思
+1. **讀 [`sessions/2026-05-06-m6-llm-polish.md`](sessions/2026-05-06-m6-llm-polish.md)**（M6 implementation session log）— 5 chunks summary + commit table + key decisions + Follow-ups for M7。重點是「Follow-ups for M7」段：4 LLM providers wired but only Groq is also a Whisper provider；M7 加 local Whisper alternative。
+2. **讀 [`sessions/2026-05-06-m6-llm-polish-kickoff.md`](sessions/2026-05-06-m6-llm-polish-kickoff.md)**（M6 plan refinement reference）— 8 user-confirmed decisions + 45 challenger findings。
+3. **跑 `docs/m6-acceptance.md` 18 條** user manual acceptance（M6 implementation done、待 user 跑）；任何 P0 fail 回 main session 修。
+4. **M7 dispatch 前 spike**：whisper.cpp Rust binding 選 `whisper-rs` vs `whisper-cpp-2` vs 直接 FFI、寫 hello-world 跑 base 模型轉錄一個 5 秒 WAV、驗證 Windows build pipeline 不踩雷、量測延遲。pre-chunk 0 commit 1 個 spike PR。
+5. **plan-time challenger 必跑**（CLAUDE.md item #5）：focus FFI safety / Windows build pipeline 踩雷 / latency 量測 / cross-platform binding choice / model file 下載 SHA-256 校驗。
+6. **每 chunk 完成 → reviewer subagent**（Opus、`general-purpose`）prompt 用 plan 對應 chunk Reviewer checklist。**Rust binding chunk reviewer critical**：FFI safety 任何 panic 立即 P0
+7. **chunk N 後 dispatch retro challenger**（CLAUDE.md item #6）：focus offline-first 體驗 / cloud→local fallback UX / cancel-on-shutdown
 
 ## 最近的 session
 
@@ -30,6 +31,7 @@
 | [2026-05-05](sessions/2026-05-05-m4-hotkey-paste.md) | M4 Global Hotkey + Paste (SetWindowsHookExW + arboard STA + AltGr suppression + modifier residue + IME complete + 7-step paste pipeline) | ✅ M4 done、5 chunks + 2 reviewers + paste.rs split + 2 acceptance fixes（issue 1 keystroke suppression + issue 2 v2 parallel transcribes + session counter + paste serialization）；157 cargo tests + 16 vitest pass、acceptance 通過 |
 | [2026-05-05](sessions/2026-05-05-m5-hud-overlay.md) | M5 HUD Overlay (4 visual states + 6-bar waveform + ARIA + reduced-motion + active-monitor positioning + Dashboard sidebar badge) | ✅ M5 done、5 chunks + chunk 1 reviewer P0 fix + chunk 2 P1/P2 polish + retro P1 ellipsis fix + 3 acceptance fixes（HUD visible:true + capability set-ignore-cursor-events + user-select:none）；53 vitest + 163 cargo tests pass、acceptance 通過 |
 | [2026-05-06](sessions/2026-05-06-m6-llm-polish-kickoff.md) | M6 LLM Polish kickoff — plan-time challenger refine | 📋 Plan refined：6 chunks (5.5d 預估)、8 decisions resolved、Plan-time challenger 45 findings 全 fold（F1-F33 critical 進 chunks、P2 進 IDEAS）。待 user 確認、未動 code |
+| [2026-05-06](sessions/2026-05-06-m6-llm-polish.md) | M6 LLM Polish 實作（4 free providers + 5 preset modes + tri-state + retry + HUD enhancing visual + Settings UI + upgrade banner） | ✅ M6 done、5 chunks（chunk 0 IPC types + CSP → chunk 1 Rust llm_polish module → chunk 2 voice flow polish branch tri-state + retry → chunk 3 HUD enhancing + sidebar badge → chunk 4 Settings UI 4 provider + 5 preset + upgrade banner）+ chunk 5 milestone closure docs；281 cargo + 99 vitest pass、靜態檢查全綠；user manual acceptance 18 條待跑（`docs/m6-acceptance.md`） |
 
 ## Memory file 結構
 

@@ -272,3 +272,57 @@ Spec §17 open question 留給 implementer。實作 `:key="store.status"` 對 st
 - **Settings field-level deserializer 容錯（H36、M9 polish）**：當前 `Settings::load_or_default` 處理 top-level 壞 JSON 走 default。但 partial-malformed（如 `{"hotkey": ..., "llmCustomPrompt": 12345}` wrong type）整個 deserialize fail → 全 default、user 失去正確的 hotkey 設定。M9 polish 加 per-field permissive deserializer with logging。Add unit test `settings_with_invalid_llm_field_preserves_hotkey`.
 - **PolishError variant → i18n key 對齊（I37 部分 fold、M9 漏網 audit）**：F32 chunk 4 列 18 polishError keys、覆蓋 PolishError 全 variants。M9 release verify SOP 加一條：`grep -E "polishError\." src/locales/*.json | wc -l` 應 = `grep -E "PolishError::" src-tauri/ | wc -l × 2 langs`、確保新加 variant 一定有 i18n key。
 - **In-flight polish reqwest cancel-on-shutdown（D21 carry、Phase 2 audit）**：M6 不 fix（`lib.rs` Exit 8-step 沒 polish wait）；user 在 polish 期間 quit app → in-flight HTTP cancel 但 server-side 已扣 token quota。M9 release verify 量 dogfood 是否真撞到。Phase 2 接 cancel channel 後一併修。
+
+## M6 chunk reviewer findings (2026-05-06 — chunks 0-4)
+
+> 由 M6 chunks 0-4 完成後 reviewer subagents 找出。chunk-internal P1 已 fold 進後續 chunks（如 chunk 0 reviewer P2 LLM_PROVIDERS inactive 由 chunk 4 fix；chunk 1 reviewer P1-1 stale `#[allow(dead_code)]` 由 chunk 2 fix；chunk 2 reviewer P2-3 F23 ESC during enhancing 由 chunk 3 加 test cover）。以下 ~35 surviving items 是 M9 polish / Phase 2 candidates、不阻擋 M6 ship。
+
+### Chunk 0 reviewer (P2 only — 4 items)
+
+- **P2-1 `credentials.ts` doc comment under-describes type widening**：chunk 0 把 `LlmProviderId` widening 進 credentials provider list、doc comment 沒明說 widening rationale。M9 polish docstring 加 reasoning。
+- **P2-2 `LLM_PROVIDERS` 仍 inactive for openrouter/nvidia in chunk 0**（chunk 4 fixed）：chunk 0 加 type / Rust schema、chunk 4 才 flip `active: true`。M9 review 已 follow up done.
+- **P2-3 `SUCCESS_LINGER_MS = 1000` 仍未 bump in chunk 0**（chunk 2 fixed by Decision #8）：chunk 0 不動 voice flow store、chunk 2 加 1000→1500 bump。M9 confirmed done.
+- **P2-4 placeholder module style cosmetic**：`llm_polish/mod.rs` 22 LOC placeholder 風格不 align Rust idiom（chunk 1 重寫）。M9 cosmetic.
+
+### Chunk 1 reviewer (P1 + P2 — 10 items)
+
+- **P1-1 stale `#[allow(dead_code)]` on `get_credential`**（chunk 2 fixed）：chunk 1 加 `#[allow(dead_code)]` 因 lib.rs 還沒 register polish_text、chunk 2 register 後此 attr 應移除（已 done）。
+- **P1-2 Retry-After comment misleading**（chunk 2 fixed via pre-fetch）：chunk 1 註解寫「retry only if Retry-After ≤ 2s」但實作是 ≤ 2s ✓ 但 ≤ 1s 才實際走 retry path（與註解 mismatch）。chunk 2 改 frontend retry-same logic 後此 comment 已 不適用、chunk 2 cleanup。
+- **P2-3 No explicit OAI-compat 401/429/500 wiremock tests**（compensated by direct parser tests）：chunk 1 wiremock 主要 test happy path、4 xx/5xx 用 direct parser tests cover、wiremock 沒專門測 OAI-compat 4xx/5xx。M9 polish candidate（switch wiremock 系列若 M9 strictness 需要）。
+- **P2-4 `insta` not used for prompt-string snapshots**（acceptable per "或等價"）：chunk 1 spec 寫 insta snapshot OR 等價、implementer 用 inline string compare assert 等價。M9 switch insta if strictness needed.
+- **P2-5 `MaxOutputTokens` defensive fallback in OAI-compat path; consider `cfg(debug_assertions)` panic**：chunk 1 build_request OAI-compat 雖然只用 LegacyMaxTokens、但 fallback 到 MaxOutputTokens 防萬一。M9 polish 改 `cfg(debug_assertions)` panic 強化 invariant。
+- **P2-6 Gemini truncation accepts `>= raw_len`（spec says `≥ 0.9× raw`、lenient by ~0.1）**：chunk 1 implementer 對 Gemini truncation 的接受 threshold 比 spec lenient。M9 polish 評估 threshold 調整。
+- **P2-7 `unwrap_or_else(|| "groq".to_string())` defensive default in `polish_text` — could surface ParseError**：chunk 1 polish_text 對 settings provider 取 unwrap fallback `"groq"`、實際應 surface `ParseError`。M9 polish 改 `Result<>` propagate.
+- **P2-8 Token count `(Option<u32>, Option<u32>)` flatten loses "no usage at all" vs "missing fields" distinction**：chunk 1 token count parse 用 (Option, Option) tuple、unable to distinguish provider 沒回 usage object vs 回了但 fields 缺。M9 polish 改 `Option<TokenUsage>` 再各自 Option。
+- **P2-9 `_ => "groq"` fallback in `emit_fallback` could log warning for routing bug**：chunk 1 polish_text emit fallback 對 unknown provider fallback "groq"、應加 log warn 抓 routing bug。M9 polish add `tracing::warn!`.
+- **P2-10 LOC budget overrun (3742 lines vs ~1100 budget)**：mostly tests + docstrings、5 sub-modules 各別超 budget。reviewer flagged but 不 P0 因 critical correctness 路徑值得多 test。**lesson**：Rust critical 路徑 LOC budget hard constraint 不適用、reviewer should audit 內容品質而非 LOC.
+
+### Chunk 2 reviewer (P1 + P2 — 8 items)
+
+- **P1-1 `isRetryablePolishError` doc claims "mirrors Rust `is_retryable`" but they actually diverge**：TS `Busy` 視為 retryable、Rust `is_retryable` 不視 Busy 為 retryable。Doc/code drift。M9 polish 修 doc 或 align logic.
+- **P1-2 Stale `#[allow(dead_code)]` on Rust `is_retryable`**：Decision #5 routes retry to frontend、`is_retryable` Rust 函數變 dead code、chunk 2 應 remove `#[allow(dead_code)]` 或 delete 整 fn。M9 polish.
+- **P2-1 polishEnabledAtStart Map race-out leak**：rare bounded leak（snapshot key 的 Map 會在 session crash 不 cleanup 時殘留）。M9 robustness fix（finally block clear）.
+- **P2-2 polishWarning cross-session pollution**：rare race when older session's polish failure fires after newer recording starts。chunk 3 部分 mitigate（lifecycle clear in transitionTo idle/recording）、IDEAS append 為 M9 race fix（與 M5 retro `audio:recording-aborted` race fix 相關）.
+- **P2-3 F23 ESC during enhancing test**（chunk 3 added）：chunk 2 console.warn no-op 加了、chunk 3 加 test cover.
+- **P2-4 Polish failure NOT trigger 3s error linger not explicitly asserted**：chunk 2 vitest 雖然測 polish failure → polishWarning + raw paste、但沒 explicit 測「不走 3s error linger 路徑」（若 implementer 改寫成 走 error 而非 success-warning bubble、test 不會 catch）。M9 robustness add explicit assertion.
+- **P2-5 None + hasCred=true (trust-transitive) path no unit test**：chunk 2 vitest 主要 cover `Some(true)` / `Some(false)` paths、F22 None auto-detect 路徑沒 dedicated unit test。M5→M6 trust-transitive 是 critical UX flow、M9 polish add test.
+- **P2-6 F28 ARIA \W regex strips CJK**（chunk 3 fixed via \p{L}）：chunk 2 加的 ARIA wording differ assertion 用 `\W` regex、CJK context strip 中文後變 empty string、assertion 永遠 false。chunk 3 reviewer 抓出後改 `\p{L}` Unicode-aware letter class.
+
+### Chunk 3 reviewer (P2 — 3 items)
+
+- **P2-1 Playwright MCP screenshot leak vector to repo root**（chunk 4 added .gitignore patterns）：M5 chunk 4 已 cleanup `m5r-*.png`、M6 chunk 3 reviewer 仍踩雷。chunk 4 加 `.gitignore` 8 line patterns 阻擋 future leak.
+- **P2-2 `<Transition>` icon swap timing regression test guard missing**：chunk 3 加 success bubble dual-mode（CheckCircle2 ↔ AlertTriangle 透過 `<Transition>`）、但 test 沒 cover transition timing regression（如未來 implementer 把 transition prop 從 `mode="out-in"` 改 default、icon 會 overlap 短暫）。M9 polish add Playwright timing guard.
+- **P2-3 Dashboard sidebar hidden in transcribing/success states (M9 dogfood may revisit)**：chunk 3 only enhancing badge cascade、transcribing / success states sidebar badge hidden（M5 既定）。M9 dogfood 看 user 是否 want transcribing badge.
+
+### Chunk 4 reviewer (P1 + P2 — 10 items)
+
+- **P1-1 `SettingsLlmPolishSection.vue` 686 LOC vs 400 budget**（extract dataflow indicator + upgrade banner + no-key banner subcomponents）：超 budget 70%、chunk 4 reviewer flagged 應 extract subcomponents。implementer time 不夠、M9 polish refactor.
+- **P1-2 Upgrade banner flash-of-hidden-then-shown (synchronous localStorage read at script setup top)**：原 `onMounted` async read、reload 時 banner 短暫 flash hidden 再 show。chunk 4 implementer 已修 sync read at script setup top.
+- **P2-1 `apiKey.providerInactiveSuffix` `M6+` → `v0.2` change**（intentional, doc per Decision #3）：chunk 4 改 i18n suffix wording from "M6+" to "v0.2"、reflect Decision #3 cascade（OpenAI/Anthropic defer to v0.2、不是 M6 加）。Doc 已 cover.
+- **P2-2 Reviewer screenshots write to repo root despite filename param (consider PowerShell wrapper)**：chunk 4 reviewer Playwright 仍寫 repo root（cwd issue not yet fixed by `.gitignore`）。M9 process improvement 寫 PowerShell wrapper `playwright-screenshot.ps1` 強制 path prefix `.playwright-mcp/<reviewer>/`.
+- **P2-3 Test polish button enabled when polish ON + no key (acceptable diagnostic, could disable + tooltip)**：chunk 4 toggle ON + no key 時 test polish button 仍 enabled、user 點會看 ApiKeyMissing error。可 disable + tooltip「請先設 API key」更友善。M9 UX polish.
+- **P2-4 `syncFromStore` provider whitelist hardcoded; should derive from `LLM_PROVIDERS.filter(p => p.active)`**：chunk 4 syncFromStore 對 provider 切換 hardcoded check `provider in ['groq', 'openrouter', 'nvidia', 'gemini']`、未來 v0.2 加 OpenAI/Anthropic 時 whitelist 沒 update。改 derive from `LLM_PROVIDERS.filter(p => p.active)` 自動 sync. M9 refactor.
+- **P2-5 `watch + onMounted` slight redundancy**：chunk 4 SettingsLlmPolishSection 用 `watch` + `onMounted` 雙重 sync、redundancy。M9 polish consolidate.
+- **P2-6 No `<Suspense>` boundary (brief flash of defaults before sync)**：chunk 4 mount 瞬間 user 看 default values flash 0.1s、再 sync from store。M9 polish 加 `<Suspense>` 包 settings load.
+- **P2-7 Custom prompt blur-persist (no debounced fallback)**：chunk 4 custom prompt only blur 時 persist、user 中途切視窗會丟未 persist 內容。M9 polish 加 debounced auto-save。
+- **P2-8 Pre-existing Audio Input section error (not chunk 4 — investigate as separate issue)**：reviewer 跑 settings smoke test 時 Audio Input section console error、不是 chunk 4 加的（M5 / M3 carry forward）。投單獨 issue investigate.
