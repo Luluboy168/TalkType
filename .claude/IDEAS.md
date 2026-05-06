@@ -236,3 +236,39 @@ Spec §17 open question 留給 implementer。實作 `:key="store.status"` 對 st
 - **Vocabulary auto-learn**（v0.2）：Typeless 模式、出現 ≥3 次自動加。當前 manual list（M8）不夠 sticky。
 - **Per-step data-flow indicator UI**：「Audio → Groq Whisper → OpenAI Polish → Paste（無 retention）」清楚 render 在 Settings。M9 polish。避免 Typeless 那種 marketing 失調翻車。
 - **Vite-only mode `invoke` error UX**：`SettingsView.vue` 在 `pnpm dev`（沒 Tauri runtime）時把「Cannot read properties of undefined (reading 'invoke')」直接 render 為紅錯。M9 用 `if (window.__TAURI_INTERNALS__)` 探測 + friendly fallback。
+
+## M6 plan-time challenger findings (2026-05-06 — 不在 M6 scope、留下次)
+
+> 由 M6 開工前 plan-time challenger subagent（agentId `a5769f31fdf47c8c7`）找出 45 findings、main session 對照 plan + spec 後判定優先級。P0 + critical P1 已 fold 進 [`sessions/2026-05-06-m6-llm-polish-kickoff.md`](sessions/2026-05-06-m6-llm-polish-kickoff.md) refined chunks（F1-F33）；以下 P2 + 部分 P1 不阻擋 M6 ship、留 M9 / Phase 2。
+
+### Privacy / Security（M9 unless noted）
+
+- **Vocabulary 多 vendor PII（A3、Phase 2 privacy）**：M3 vocabulary 跟 Whisper prompt 一起送 Groq、M6 加上 OpenAI / Anthropic / Gemini polish prompt — 同 user vocabulary 變成送 4 個 vendor 的 server log。User 加自己名字「張小明」或公司術語進去、4 vendor 都 log。M9 privacy disclosure 必須列出 multi-vendor flow（不只「audio → Groq」）。考慮加 Settings `llm_polish_send_vocabulary: bool` opt-out（預設 true）給 privacy-conscious user。
+- **Custom prompt provenance（A4、M9 docs）**：user 從外部 LLM 頁面（Claude / ChatGPT）複製進 TalkType custom prompt textarea — 那串內容若被 LLM-attacker 注入，polish 流程的 system prompt 變成 attacker-controlled、output 可能 inject 進 paste target。Phase 1 不解決、M9 加 textarea 旁警告「不建議直接複製來自 web LLM 的提示詞」+ 加進 `doc/plans/05-data-model.md` Custom prompt section threat model 文件。
+- **In-flight polish HTTP shutdown 漏 token billing（D21、M9 polish）**：`lib.rs::RunEvent::Exit` 8-step shutdown 沒等 in-flight polish_text future。reqwest 強制 cancel 但 server-side 已 commit prompt tokens、user 月底看 LLM bill 多 N 次幽靈 charges。M9 加「step before audio mute restore：等 polish_busy 1s timeout」用 `tokio::time::timeout` + `polish_busy.load()` poll。
+
+### UX gaps（dogfood + M9）
+
+- **ESC during enhancing 不 cancel polish（F23 decision、M6 explicit no-op）**：M6 不投資 cancel channel、ESC during enhancing 只 console.warn「優化中無法取消」。User 撞到 15s timeout 不能中止。Phase 2 加 `cancel_polish` Tauri command + `tokio::select!` cancel channel。
+- **Toggle hotkey burst during enhancing（F24 decision、polish_busy guard reject）**：second polish_text 期間返回 `Busy` → fallback to raw paste。Spec 留：可考慮 drop polish_busy 完全（mirror M4 transcribe_busy removal）每 polish 各自 future、無 shared state — 但 LLM 計費考量保留 guard 防 quota burn。Dogfood 期收 user feedback 看是否 friction。
+- **SR 連續 transcribing → enhancing 不 announce（F28 mitigation、Phase 2 a11y polish）**：F28 改 ARIA wording 故意不同 + zero-width space mitigate；但 Phase 2 a11y testing 必須驗實機 NVDA / Narrator 是否 both announce。
+- **HUD success state 1.5s linger 仍可能不夠**（M5 retro P1 carry、Decision #8 bump 1000→1500）：M6 加 enhancing → 整個 pipeline 變長、user 對 success 視覺確認需求增。Dogfood 觀察 1500ms 是否還短、可能 v0.2 改成 settings `hud.success_linger_ms`。
+- **Custom prompt token estimate（E26、M9 polish UX）**：UI 只顯示 char count，CJK 1 char ≈ 1.5 tokens 不直觀。M9 加 estimated tokens display（`chars * 1.5` heuristic for CJK；ASCII-only 用 `chars * 0.25`）。
+
+### Provider / API contract risks
+
+- **Anthropic / OpenAI / Gemini 模型 deprecation（C13 partial fold、F4 escape hatch + M9 monitor）**：F4 已加 `llm_model_id_override` schema field、user 可手動 paste 任何 model ID（不需 app update）。但 `LLM_MODEL_LIST` 自動 refresh 仍是 M9 candidate（fetch live `/v1/models` 與 hardcoded 比、過期警告）。
+- **Anthropic `anthropic-version: 2023-06-01` hardcode（C16、M9 release prep）**：M6 pin 2023-06-01。Anthropic 若 deprecate 此 version mid-Phase-1（如 2024 deprecate 2023-01-01）polish 全 break。M9 release prep 加 re-confirm version 步驟、加 `LLM_API_VERSIONS` const block + next-review-date comment。
+- **SSE streaming polish（C18、Phase 2 candidate）**：M6 spec 不做 streaming（HTTP 1 round trip）。OpenAI / Anthropic / Gemini 都 support SSE。Phase 2 candidate：HUD bubble 漸進式 reveal polish text。defer 因 (a) SendInput Ctrl+V 不能 paste partial；(b) user expectation 是 paste-after-complete。
+
+### Architectural debt（M9）
+
+- **3 enum HttpProviderError 抽 shared trait（Plan §4 #1 + G33、M9 polish 候選）**：`TestConnectionError` + `TranscriptionError` + `PolishError` 三 enum 各 ~80% Network*/RateLimited/ApiError/ParseError 重複。M6 不抽（3 enum 是抽象 threshold 邊緣、抽會 risk M6 review noise hide bug）。M9 polish dedicated commit 抽 `HttpProviderError` trait + 各 module 拼自己 data-layer variant。
+- **`enhancement_duration_ms` SQLite write（J43、M8 history persistence）**：M6 PolishResult 有 durationMs 但不 write SQLite（database.rs M8 才接）。M8 history persistence 從 PolishResult 讀 durationMs 寫進 transcriptions table。M6 dogfood 期僅 console.log。
+- **Token count → SQLite analytics（I39、M8 + M9）**：F17 PolishResult 已預留 input_tokens / output_tokens optional 欄位、M6 不 display UI。M8 history persistence 寫進 SQLite、M9 dogfood 用 token / latency 量 p50 p95。
+
+### Backward compat / observability
+
+- **Settings field-level deserializer 容錯（H36、M9 polish）**：當前 `Settings::load_or_default` 處理 top-level 壞 JSON 走 default。但 partial-malformed（如 `{"hotkey": ..., "llmCustomPrompt": 12345}` wrong type）整個 deserialize fail → 全 default、user 失去正確的 hotkey 設定。M9 polish 加 per-field permissive deserializer with logging。Add unit test `settings_with_invalid_llm_field_preserves_hotkey`.
+- **PolishError variant → i18n key 對齊（I37 部分 fold、M9 漏網 audit）**：F32 chunk 4 列 18 polishError keys、覆蓋 PolishError 全 variants。M9 release verify SOP 加一條：`grep -E "polishError\." src/locales/*.json | wc -l` 應 = `grep -E "PolishError::" src-tauri/ | wc -l × 2 langs`、確保新加 variant 一定有 i18n key。
+- **In-flight polish reqwest cancel-on-shutdown（D21 carry、Phase 2 audit）**：M6 不 fix（`lib.rs` Exit 8-step 沒 polish wait）；user 在 polish 期間 quit app → in-flight HTTP cancel 但 server-side 已扣 token quota。M9 release verify 量 dogfood 是否真撞到。Phase 2 接 cancel channel 後一併修。
