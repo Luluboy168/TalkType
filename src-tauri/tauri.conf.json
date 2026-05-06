@@ -15,17 +15,19 @@
         "label": "main",
         "title": "TalkType",
         "url": "index.html",
-        "width": 400,
-        "height": 100,
+        "width": 380,
+        "height": 56,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "visible": false,
+        "visible": true,
         "focus": false,
         "resizable": false,
         "shadow": false,
-        "center": true
+        "center": false,
+        "x": 0,
+        "y": 0
       },
       {
         "label": "main-window",

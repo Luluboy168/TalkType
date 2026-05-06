@@ -56,7 +56,7 @@ use tauri::{
     AppHandle, Emitter, Manager, RunEvent, WindowEvent,
 };
 
-use plugins::{audio_recorder, clipboard_paste, credentials, hotkey_listener, transcription};
+use plugins::{audio_recorder, clipboard_paste, credentials, hotkey_listener, hud, transcription};
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -166,6 +166,125 @@ pub fn run() {
         }));
     }
 
+    // M5 chunk 0: split the `generate_handler!` macro across two cfg-gated
+    // bindings so the debug-only `set_hud_visible_for_dev` symbol is stripped
+    // entirely from release builds. Per challenger P1-6, putting
+    // `#[cfg(debug_assertions)]` on a single command inside one
+    // `generate_handler!` invocation can collide with the macro expansion;
+    // splitting at the `let invoke_handler = ...` site is the recommended
+    // workaround.
+    //
+    // The macro expands to `move |__tauri_invoke__| { match ... }` whose
+    // closure parameter is `tauri::ipc::Invoke<R>`. Rust cannot infer `R`
+    // at the let-binding site (the runtime is concretized later by
+    // `Builder::default()`), so we wrap each branch in a typed local fn
+    // that pins `R = tauri::Wry` (the default desktop runtime). Wrapping
+    // in a `Fn` argument bound rather than directly assigning to `let`
+    // is what gives the macro the missing type context.
+    fn typed_handler<F>(f: F) -> F
+    where
+        F: Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static,
+    {
+        f
+    }
+
+    #[cfg(debug_assertions)]
+    let invoke_handler = typed_handler(tauri::generate_handler![
+        ping,
+        audio_recorder::commands::start_recording,
+        audio_recorder::commands::stop_recording,
+        audio_recorder::commands::clear_recording_buffer,
+        audio_recorder::commands::list_audio_input_devices,
+        audio_recorder::commands::get_default_input_device_name,
+        audio_recorder::preview::start_audio_preview,
+        audio_recorder::preview::stop_audio_preview,
+        audio_recorder::files::save_recording_file,
+        audio_recorder::files::read_recording_file,
+        audio_recorder::files::delete_recording,
+        audio_recorder::files::delete_all_recordings,
+        audio_recorder::files::cleanup_old_recordings,
+        // M3 chunk-1: credentials. NOTE: `get_credential` is intentionally
+        // NOT registered here — it is `pub(crate)` and called from
+        // transcription / llm_polish modules in Rust only. Architecture
+        // invariant #1: API key never crosses the IPC boundary.
+        credentials::set_credential,
+        credentials::delete_credential,
+        credentials::has_credential,
+        // Frontend-safe masked preview ("gsk_aBc…XyZ1") so the user can
+        // identify which key is currently stored. Full key never crosses
+        // IPC — masking happens Rust-side.
+        credentials::get_credential_preview,
+        // M3 chunk-2: transcription. `transcribe_audio` is the single
+        // frontend entry point; M7 will keep the same command and route
+        // internally to local whisper.cpp when settings select it.
+        transcription::transcribe_audio,
+        // M3 chunk-3 (Q5): provider connectivity health check. M3 ships
+        // Groq; M6 will extend the same command to OpenAI / Anthropic
+        // / Gemini by adding match arms in `transcription/health.rs`.
+        transcription::health::test_provider_connection,
+        // M4 chunk 1: hotkey listener. `update_hotkey_config` is the
+        // frontend hot-swap path (Settings UI calls this); the two
+        // recording commands return `NotImplemented` in Phase 1 so the
+        // command surface stays stable while the UI hides the buttons.
+        hotkey_listener::update_hotkey_config,
+        hotkey_listener::start_hotkey_recording,
+        hotkey_listener::cancel_hotkey_recording,
+        // M4 chunk 2: clipboard paste. The Pinia voice-flow store calls
+        // `capture_target_window` on hotkey-down, then `paste_text` after
+        // transcription completes. `copy_to_clipboard` is exposed for
+        // future Dashboard "copy" affordances (M8 history view).
+        clipboard_paste::capture_target_window,
+        clipboard_paste::paste_text,
+        clipboard_paste::copy_to_clipboard,
+        // M4 chunk 3: persistent settings. `get_settings` is the once-
+        // on-boot snapshot; `update_settings` is the patch path that
+        // also hot-swaps `HotkeyListenerState` and broadcasts
+        // `settings:updated` to both windows.
+        settings::get_settings,
+        settings::update_settings,
+        // M5 chunk 0: HUD positioning + dev tooling. `position_hud_for_active_monitor`
+        // is invoked from `useVoiceFlowStore.handleStart` BEFORE recording so the HUD
+        // appears on the user's active monitor. `set_hud_visible_for_dev` is debug-only
+        // (stripped in the cfg(not(debug_assertions)) branch below).
+        hud::position_hud_for_active_monitor,
+        hud::set_hud_visible_for_dev,
+    ]);
+
+    #[cfg(not(debug_assertions))]
+    let invoke_handler = typed_handler(tauri::generate_handler![
+        ping,
+        audio_recorder::commands::start_recording,
+        audio_recorder::commands::stop_recording,
+        audio_recorder::commands::clear_recording_buffer,
+        audio_recorder::commands::list_audio_input_devices,
+        audio_recorder::commands::get_default_input_device_name,
+        audio_recorder::preview::start_audio_preview,
+        audio_recorder::preview::stop_audio_preview,
+        audio_recorder::files::save_recording_file,
+        audio_recorder::files::read_recording_file,
+        audio_recorder::files::delete_recording,
+        audio_recorder::files::delete_all_recordings,
+        audio_recorder::files::cleanup_old_recordings,
+        credentials::set_credential,
+        credentials::delete_credential,
+        credentials::has_credential,
+        credentials::get_credential_preview,
+        transcription::transcribe_audio,
+        transcription::health::test_provider_connection,
+        hotkey_listener::update_hotkey_config,
+        hotkey_listener::start_hotkey_recording,
+        hotkey_listener::cancel_hotkey_recording,
+        clipboard_paste::capture_target_window,
+        clipboard_paste::paste_text,
+        clipboard_paste::copy_to_clipboard,
+        settings::get_settings,
+        settings::update_settings,
+        // M5 chunk 0: HUD positioning. `set_hud_visible_for_dev` is omitted
+        // in release builds so the symbol does not exist; an IPC call from a
+        // packaged build returns an unknown-command error.
+        hud::position_hud_for_active_monitor,
+    ]);
+
     let app = builder
         .plugin(tauri_plugin_opener::init())
         // M4 chunk 3: persistent JSON store for `Settings`. Must register
@@ -231,60 +350,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![
-            ping,
-            audio_recorder::commands::start_recording,
-            audio_recorder::commands::stop_recording,
-            audio_recorder::commands::clear_recording_buffer,
-            audio_recorder::commands::list_audio_input_devices,
-            audio_recorder::commands::get_default_input_device_name,
-            audio_recorder::preview::start_audio_preview,
-            audio_recorder::preview::stop_audio_preview,
-            audio_recorder::files::save_recording_file,
-            audio_recorder::files::read_recording_file,
-            audio_recorder::files::delete_recording,
-            audio_recorder::files::delete_all_recordings,
-            audio_recorder::files::cleanup_old_recordings,
-            // M3 chunk-1: credentials. NOTE: `get_credential` is intentionally
-            // NOT registered here — it is `pub(crate)` and called from
-            // transcription / llm_polish modules in Rust only. Architecture
-            // invariant #1: API key never crosses the IPC boundary.
-            credentials::set_credential,
-            credentials::delete_credential,
-            credentials::has_credential,
-            // Frontend-safe masked preview ("gsk_aBc…XyZ1") so the user can
-            // identify which key is currently stored. Full key never crosses
-            // IPC — masking happens Rust-side.
-            credentials::get_credential_preview,
-            // M3 chunk-2: transcription. `transcribe_audio` is the single
-            // frontend entry point; M7 will keep the same command and route
-            // internally to local whisper.cpp when settings select it.
-            transcription::transcribe_audio,
-            // M3 chunk-3 (Q5): provider connectivity health check. M3 ships
-            // Groq; M6 will extend the same command to OpenAI / Anthropic
-            // / Gemini by adding match arms in `transcription/health.rs`.
-            transcription::health::test_provider_connection,
-            // M4 chunk 1: hotkey listener. `update_hotkey_config` is the
-            // frontend hot-swap path (Settings UI calls this); the two
-            // recording commands return `NotImplemented` in Phase 1 so the
-            // command surface stays stable while the UI hides the buttons.
-            hotkey_listener::update_hotkey_config,
-            hotkey_listener::start_hotkey_recording,
-            hotkey_listener::cancel_hotkey_recording,
-            // M4 chunk 2: clipboard paste. The Pinia voice-flow store calls
-            // `capture_target_window` on hotkey-down, then `paste_text` after
-            // transcription completes. `copy_to_clipboard` is exposed for
-            // future Dashboard "copy" affordances (M8 history view).
-            clipboard_paste::capture_target_window,
-            clipboard_paste::paste_text,
-            clipboard_paste::copy_to_clipboard,
-            // M4 chunk 3: persistent settings. `get_settings` is the once-
-            // on-boot snapshot; `update_settings` is the patch path that
-            // also hot-swaps `HotkeyListenerState` and broadcasts
-            // `settings:updated` to both windows.
-            settings::get_settings,
-            settings::update_settings,
-        ])
+        .invoke_handler(invoke_handler)
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 

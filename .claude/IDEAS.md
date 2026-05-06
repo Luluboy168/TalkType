@@ -127,7 +127,102 @@
 - **Async listener registration race in `useVoiceFlowStore.init()`（M5 owns）**：`useVoiceFlowStore.ts:206-241` 用 `void listenToEvent(...).then(unlisten => unlistenFns.push(unlisten))`。`listenToEvent` 是 async 回 Promise、events fired between `init()` 呼叫與 Promise resolve 之間會丟失。Phase 1 HUD bootstrap 比 user reflex 快、不會踩；M5 加 HUD visual states 時 consider 改 `init()` 回 Promise + await all `listen` registrations 才宣告 ready。
 - **`PASTE_FOCUS_RESTORE_FAILED` 已 active state collision（M5 owns）**：`useVoiceFlowStore.ts:230-241` 若此 event 在 `transcribing` 中發 (極少見的 race：paste 失敗剛好撞上下一個 HOTKEY_PRESSED 開新 flow)，會把已 active 的新 flow state 清成 `error`。Phase 1 paste ordering 幾乎不可能踩；M5 HUD 擁有 visual state 時要處理 collision (e.g. only transition if status === 'recording'/'transcribing' for THIS paste cycle)。
 
-## Phase 2 / 後期想法
+## M5 plan-time challenger findings（2026-05-05 — 不在 M5 scope、留下次）
+
+> 由 M5 開工前 plan-time challenger subagent 找出（agentId `abe35088f7a648bf9`）。P0 + P1（除以下）已折進 spec + plan、main session 修計畫不修 code。以下 P1-2 + 3 個 P2 留 M9 / Phase 2。
+
+- **P1-2：Vitest 測 `<Transition mode="out-in">` 在 jsdom 不可靠（M5 chunk 2 implementer 認知）**：jsdom + Vue 3.5 transition hooks 多半 sync、無 real animation。M5 chunk 2 vitest tests 只測 state→class mapping after `nextTick()`、transition timing 留 Playwright 驗證；implementer 要知道別跟 jsdom 的 transition timing 對打。
+- **P2-1：Dashboard sidebar 只顯示 `recording`、不顯示 `transcribing` / `error`（Phase 2）**：M5 簡版 — user 按熱鍵走開、轉錄期 / 失敗時 sidebar 沒回饋。Phase 2 加多 state badge / tooltip。
+- **P2-2：`aria-live="polite"` 連續同訊息 SR 不 announce（Phase 2 a11y polish）**：rapid hotkey press → recording → transcribing → recording → transcribing 第二輪 SR 可能略過。Phase 2 用 dummy aria-label change（加無意義 trailing space 或變數）強制 announce。
+- **P2-3：HudSpinner 30 LOC 可考慮 inline 進 HudOverlay template（cosmetic）**：4-component 切分對 30 LOC 的 spinner 略 over-engineered；chunk 2 implementer 可自行決定 inline 與否、無強制。
+
+## M5 chunk reviewer findings (2026-05-05 — chunk 2 & 3)
+
+> 由 M5 chunks 2+3 完成後 reviewer subagent 找出。Chunk 1 reviewer P0（formatError pattern）已 fix in `6af0992`；以下 chunk 2 reviewer P1-3 + chunk 3 reviewer P2 留下次。
+
+### Chunk 2 reviewer
+- **P1-3 docstring gap**：`useAudioWaveform.start` `starting` flag docstring 沒提「rejection 後 retry」semantics — 加 1-line clarification
+- **P1-5 fontsource preload for HUD entry (FOUT mitigation)**：`dist/index.html` HUD 載 Geist via fontsource、woff2 lazy load 後 CSS parse 後可能 FOUT。M9 polish 加 `<link rel="preload" as="font">`。
+
+### Chunk 3 reviewer
+- **P2-1 `SidebarFooter` empty wrapper artifact**（M9 polish）：idle 狀態下 `<SidebarFooter>` wrapper 仍 render 一個 padding 空 band；hoisting `v-if` 進 `AppSidebar.vue` parent 即可解。M9 dark mode polish 時順手做。
+- **P2-2 i18n key duplication**（M9 i18n consolidation）：`sidebar.recordingBadge` 與 `dashboard.audioTest.recording` 都是 "錄音中"；M9 i18n audit 時 consolidate。
+- **P2-3 `role="status"` on Dashboard badge 可能 SR 重複 announce**（Phase 2 a11y）：HUD + Dashboard 同時 `role="status"` 念兩次「Recording」；Phase 2 a11y testing 驗、可能改 Dashboard badge 為 `aria-hidden="true"`。
+- **P2-4 listener 沒 future-proof `message` field**（Phase 2 tooltip）：`HudFlowBadge.vue:41` 只讀 `payload.status`、若 Phase 2 加 tooltip 顯示 HUD message text、要回頭改 listener。
+- **P2-5 `main-window.ts` shim duplicated against `main.ts`**（M9 polish）：兩個 vite-only Tauri shim 重複；考慮抽 `src/dev/tauri-shim.ts` 共用 factory。
+
+## M5 retro challenger findings (2026-05-05)
+
+> 由 M5 完成後的 retro challenger subagent（CLAUDE.md item 6 強制）獨立 review 整合後 codebase + 跑自己的 Playwright pass 找出。Chunk reviewers 抓 chunk-level、retro challenger 抓 cross-chunk integration + 整體性問題、漏抓的 latent 問題。Playwright 截圖列在每條後（`.playwright-mcp/m5retro-*.png` 共 14 張：idle / recording / transcribing / success / error-long / error-short / error-dismissed / warn-yellow / warn-red / rm-recording / rm-transcribing / dashboard-idle / dashboard-recording / dashboard-transcribing）。
+
+### P1 — long error message 截尾**會吃掉「（請手動 Ctrl+V）」hint**（M9 polish）
+
+`src/components/HudOverlay.vue:163-172` `.bubble-label` 設 `text-overflow: ellipsis; max-width: 280px`。chunk 1 P0 fix 把 friendly hint「（請手動 Ctrl+V）」append 到 raw Rust error 字串**末尾**，但 ellipsis 從末尾截、所以 `Failed to restore focus to target HWND 0x12345678: GetLastError=5` 之後的 hint **完全 invisible**。Playwright `m5retro-05-hud-error-long.png` 證實：截為「Failed to restore focus to target HWND 0...」、user 永遠看不到要手動 Ctrl+V 的指示。修法選項：(1) reverse pattern — hint 改 prepend 到字串前面：「（請手動 Ctrl+V）<raw error>」、ellipsis 截掉技術 detail 而非 hint；(2) HudOverlay 改 2-line bubble allow `white-space: normal` + height: auto、bubble 高度動態；(3) 把 hint 拆成獨立 `<span>` 永遠可見、raw error 才 ellipsis。M9 polish 必修 — chunk 1 reviewer P0 fix 形同失效。
+
+### P1 — recording state「6 條 bar」在 vite-only / 無音訊輸入時看起來像 reduced-motion 的 dot fallback（M6 / M9 polish）
+
+`src/components/HudWaveform.vue:38-43` 的 6 個 `<span>` 每條 `w-1 rounded-full` (4px 寬 + 圓形)、初始 `height: 4px`、`gap-1`（4px 間距）。waveform 沒收到 audio data 時 6 個 4×4 圓點等距排成水平、視覺上**幾乎跟 reduced-motion 的單一 dot 沒差**（Playwright `m5retro-02-hud-recording.png` 對 `m5retro-10-hud-rm-recording.png` 對比看不出明顯差異）。M5 chunk 2 implementer 沒踩 — vitest 測 6 個 element 存在、但「形狀對」沒 cover。修法：(1) 初始 height 改 8px（對 reduced-motion 保留 4px dot）；(2) 改用 `w-0.5` (2px) 細條 — 讓 4px height 也看起來是 vertical line；(3) 用 base height 6px + per-bar phase-shifted CSS animation（idle pulsing）製造「等待 audio」視覺。M6 LLM polish 預留 enhancing state 時順手做 base-state 動畫 fallback。
+
+### P1 — 200ms `<Transition mode="out-in">` 與 `setIgnoreCursorEvents` await 沒同步、real Tauri runtime race window（M9 polish）
+
+`HudOverlay.vue:65-70` `watch(store.status)` 觸發 `syncClickThrough(next)`、async function 直接 `await getCurrentWindow().setIgnoreCursorEvents(...)`、跟 `<Transition>` 進場/出場 200ms 平行跑、無同步。失敗模式：error → idle 切換瞬間 — Vue Transition 還在 fade out（200ms）+ `setIgnoreCursorEvents(true)` IPC round trip（Tauri ~10-50ms）— user 在 200ms 視窗點 HUD bubble，OS 已切 click-through-on，用戶 click 穿透而非 dismiss。Playwright vite shim 不會 reproduce（IPC 是 sync no-op）。實機 Tauri runtime 也許 IPC 比 Vue transition 快、不會踩 — 但沒驗。M9 dogfood 觀察 user 是否 report「點 dismiss 沒動 / 點到下層 app」、若有則改 Vue Transition `@before-leave` hook 等 `setIgnoreCursorEvents` resolve 才 leave。
+
+### P1 — `audio:waveform` listener 在非 recording state 仍跑 RAF、浪費 frame（M9 perf）
+
+`HudWaveform.vue:18-20` `onMounted` 立刻 `start()`、`onUnmounted` 才 `stop()`。但 `HudWaveform` 是 `<HudOverlay>` `<Transition mode="out-in">` 內的 conditional child — recording → transcribing 切換時、Vue **先 leave recording** (`HudWaveform` unmount → stop) **再 enter transcribing**。OK。但 `<HudOverlay v-if="visible">` 整體 unmount 時（idle）所有 child unmount → stop。但 chunk 2 改用 `watch(reducedMotion)` start/stop、沒對應 `watch(store.status)` start/stop — 也就是說 transcribing / success / error state 期間 `useAudioWaveform` listener **依然 active**（雖 component unmounted、但是 listener 是 module-level 還存活到 stop call）— 實際上 OnUnmounted handle 對。等等 — 確認：`HudWaveform` 是 inner `<div v-if="store.status === 'recording'">` 子節點、status 切離 recording 時 inner div unmount → HudWaveform unmount → stop()。OK，但 `<Transition mode="out-in">` 會延遲 unmount 到 leave 動畫結束（200ms）— 200ms 期間 RAF tick + `audio:waveform` listener 仍 active 但 useless（user 已放熱鍵、Rust 不再 emit）。M9 polish 評估「if status !== 'recording' 立刻 stop()」是否值得 chunk-by-chunk reactivity。
+
+### P1 — 短音訊 success state 1s linger 太短、user 看不到 ✓ 的視覺確認（M6 dogfood / M9 polish）
+
+Spec §2 + `useVoiceFlowStore.ts:74` `SUCCESS_LINGER_MS = 1000`。Playwright `m5retro-04-hud-success.png` 看 1 秒 user 才剛把眼睛從 paste target focus 移到 HUD bubble、HUD 已 fade out 200ms 進 idle、實際可見 success ~600-800ms。M6 LLM polish 加 enhancing state 後流程更長、user 對 success 視覺確認需求更高。建議 M6 同步 bump 到 1.5s 或加 user-config（settings `hud.success_linger_ms`）。M9 dogfood 觀察。
+
+### P1 — `prefers-reduced-motion: reduce` ON 時 6-bar fallback 跟 idle waveform 形狀**完全相同**（單一 dot），fallback 是否真有用值得質疑（Phase 2 a11y polish）
+
+Reduce-motion 顯示一個 4×4 dot + label；non-reduce-motion 在沒 audio 時顯示 6 個 4×4 dot — 視覺上幾乎沒差別。User 開啟 reduced-motion 是想避免「動畫」、但這個 fallback 對「資訊量」沒幫助 — 6 條 vs 1 條只是減量、不是「不同視覺語言」。Spec §5.2「改顯示單一灰色 dot + 「錄音中」label」其實想加文字 label 但 implementer 只加了 dot 沒加 label（Playwright `m5retro-10-hud-rm-recording.png` 確認只 dot + timer、沒「錄音中」label）。修法：reduced-motion fallback 加文字「錄音中」+ dot、跟 non-reduced-motion (waveform + timer) 視覺有意義差異。Phase 2 a11y testing 階段必修。
+
+### P1 — `transitionTo()` 改 async + `emitTo` await + `handleStart` `await transitionTo("recording")` — IPC failure 阻擋 status mutation 嗎？（M9 perf）
+
+`useVoiceFlowStore.ts:293-309` `transitionTo` `status.value = next;` **先設 local ref**、再 `await emitTo(...)`。`emitTo` 失敗只 console.warn、不 throw — 所以 local status 一定 mutate。但 `await emitTo` 在 IPC 卡住（Tauri 內部 channel 滿、極罕見）期間 **caller 整個 chain block** — `handleStart` 的 `await transitionTo("recording")`、若 emitTo 卡 100ms、user 看到 100ms 的 visual lag。Spec §6.1 的 try/catch 語意正確、但 `await` 順序對 latency 不好。修法：先 sync 設 status / message、然後 `void emitTo(...)` 不 await（emit 失敗只 warn 不 break）— 或者更乾脆 wrap `emitTo` 在 `Promise.race(emitTo(...), timeout(50ms))` 給上限。M9 polish。
+
+### P1 — Pinia `readonly()` unwrap 在 HudOverlay `store.recordingStartedAtMs` — props pass 是否 reactive 已驗（M6 verify）
+
+`HudOverlay.vue:112` `<HudTimer :started-at-ms="store.recordingStartedAtMs" />` — `store.recordingStartedAtMs` 是 `readonly(ref)` 包裝、Pinia getter 會自動 unwrap、傳給 child 是 `number | null` value。HudTimer `defineProps<{ startedAtMs: number | null }>()` + `props.startedAtMs` reactive 讀。看起來對。但 M4 chunk 3 implementer 對「readonly + props 在 Pinia getter 邊界 reactive 行為」有過 doubt（IDEAS 記過）。M5 vitest 沒 cover「mid-recording 期間 startedAtMs 不變、timer 跑」這個 scenario — chunk 2 vitest 是用 fake timers 直接設 prop 測色彩、沒測 reactive 邊界。M6 第一個 reviewer 用真 Pinia store + `recordingStartedAtMs` mutation 寫 1 個 vitest regression test。
+
+### P1 — HUD click-through 在 `success` state 是 ON、但 `success` 是有 ✓ icon + 「完成」label 的可點擊形狀、user 直覺以為可點 dismiss / 加快 fade idle（M6 / M9 UX polish）
+
+Spec §2 表格定 success 是 click-through ON，user 點不到。但設計上 success = 「程序完成、HUD 1s 後消失」、user 點是想加速消失（impatience）。目前點 success bubble 會穿透到下層 app、user 困惑「為何 HUD 擋住卻又點不到」。Playwright 已驗 click-through ON 但無法 reproduce 多視窗點透 perception 問題。建議：success state 也允許 click → 立即 idle（透明對等於 error path 的早期 dismiss 概念）；或 click-through OFF + click → idle。M6 dogfood 評估。
+
+### P2 — `audio:recording-aborted` 在 `transcribing` state 收到時 — handleError 直接 transition 到 error，但 transcribing pipeline 還在 in-flight、Rust transcribe 仍會回 result → `handleStop` 會嘗試 `pasteTextSerial`（M9 race fix）
+
+User flow：press hotkey → recording → 25 MB cap → Rust emit `audio:recording-aborted` → vue listener 走 `handleError(...)` 立即 transition error。但同時 `handleStop` 已被 hotkey-up 觸發、`stop_recording` + `transcribe_audio` + `pasteTextSerial` 都還在 await 中、`mySession === currentSession` 仍 true（recording-aborted 沒 bump session）— transcribe 完成後 `pasteTextSerial(result.rawText)` 會 paste 一個截尾 audio 的 garbage transcription、然後 `transitionTo("success")` 會 clobber `error` state、最後 user 看到 success 但 paste 的是垃圾。修法：`handleError` 從 abort listener 走時 bump `currentSession` (++) 讓 in-flight handleStop 自己 bail。或 abort listener 加 `aborted: true` flag + handleStop 檢查 flag skip paste。M9 race fix。
+
+### P2 — `useAudioWaveform.starting` flag 沒 reject 處理、若 `await listenToEvent` reject 則 flag 永遠 true、後續 start 全 short-circuit（M9 robustness）
+
+`useAudioWaveform.ts:50-67` `starting = true; try { ... } finally { starting = false; }` 是對的、try/finally 包 await 所以 reject 也會 reset flag。但 chunk 2 reviewer P1-3 docstring gap（IDEAS 已記）只說「rejection 後 retry semantics 沒寫清」— 確認 code 是對的、only 文件待補。
+
+### P2 — Dashboard sidebar 在 voice flow 中途 mount（user 開啟 Dashboard window）— 不會看到「正在錄音中」直到下一個 transition（spec §6.3 known limitation；UX gap）
+
+Spec 已 documented 但實際 dogfood 體感：user 在錄音中突然想開 Dashboard 看歷史 / 切設定、開啟後 sidebar badge 是 idle、user 困惑「我明明在錄音」。M9 加 mount-time `request_current_voice_flow_state` Tauri command + Dashboard mount 時 invoke 一次 sync 當前狀態。Phase 2 已 deferred、但 dogfood 需求可能比想像高。
+
+### P2 — HUD bubble `bg: var(--card)` 在 dark mode 沒驗、可能跟 OS dark mode + transparent window 撞色（M9 dark-mode polish）
+
+`HudOverlay.vue:155-160` `.bubble` `background: var(--card)`。`--card` 在 dark mode 下會切深色、但 HUD window 是 transparent + alwaysOnTop — dark mode 下 HUD 在白色 app（Notepad）前面 vs 黑色 app（VS Code）前面對比度不同。M5 vite-only 沒測 dark mode。M9 dark mode polish + dogfood 兩種背景驗。
+
+### P2 — `<SidebarFooter>` empty wrapper artifact 已 IDEAS、但 M5 retro 確認嚴重度比想像低（仍 M9）
+
+Playwright `m5retro-12-dashboard-idle.png` vs `m5retro-13-dashboard-recording.png` 對比 — idle 時 footer 是 ~32px padding band、recording 時 badge 取代但同 32px height。所以 idle/recording 切換**不會 layout shift**、視覺感受可接受。但 idle 時看起來像 sidebar 底部莫名留白、新 user 困惑「那塊是什麼」。M9 polish 仍須處理（hoist v-if 進 AppSidebar.vue），但不阻擋 ship。
+
+### P2 — `__hudDev` / `__dashboardDev` 在 production build tree-shake 透過 `import.meta.env.DEV` gate — Vite 確實 tree-shake 還是只 dead-code 留在 bundle？（M9 release verify）
+
+`main.ts:132` 與 `main-window.ts:20` 都用 `if (import.meta.env.DEV)` 做 condition。Vite 4+ 對 `import.meta.env.DEV === false` 的 prod build 會做 dead-code elimination — 但只有 if 整個 block 才會 strip、block 內 referenced symbol 若被外部 import 則 keep。確認方式：M9 跑 `pnpm build` + `grep -r "__hudDev" dist/`、應該找不到。沒驗證過。M9 release verify SOP 加一條 grep。
+
+### P2 — `<Transition mode="out-in">` 在同 status reactive update（recording → recording 但 message 變）會誤觸 transition（spec §17 implementer 留 question）
+
+Spec §17 open question 留給 implementer。實作 `:key="store.status"` 對 status 比較、message 變不會 re-key、不會 transition。對。但 chunk 2 implementer 沒加 vitest 確認此 invariant — 若未來 refactor 不小心把 key 改成 `${status}-${message}` 就會 broken。M6 / M9 加 vitest「同 status 不同 message 不觸發 transition」regression test。
+
+### P2 — HudTimer setInterval drift 在 toggle mode 30+ min 錄音超過 1s 累積誤差（M9 robustness）
+
+`HudTimer.vue:42-46` `setInterval(... 1000)` 不是 RAF、Browser tab 在 background 會被節流。HUD window alwaysOnTop 不應 background、但 user lock screen / display sleep 期間 setInterval 可能 throttle。30 min recording 期間 timer 顯示 vs 實際 elapsed 差幾秒 / 幾十秒、user 看到 timer 還沒到 cap 但 Rust 已 abort。修法：setInterval 改 RAF + Date.now compute、或加 visibilitychange listener resync。M9 polish — Phase 2 行動裝置 battery drain 也類似 concern。
+
 
 - **macOS dev setup**：目前 doc 只 describe 設計，沒實機跑過。Phase 2 啟動時要做 spike。
 - **Sentry telemetry opt-in flow**：要設計清楚的 UI、預設 off、第一次用時的 dialog（學 SayIt 但 SayIt 預設 on，我們改 off）。

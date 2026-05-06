@@ -4,15 +4,22 @@
     "version_label": "Version"
   },
   "hud": {
-    "title": "TalkType HUD",
-    "pongCount": "pong: {count}"
+    "aria": {
+      "recording": "Recording",
+      "transcribing": "Transcribing",
+      "success": "Done",
+      "error": "Error: {message}"
+    },
+    "transcribing": "Transcribing…",
+    "success": "Done"
   },
   "sidebar": {
     "dashboard": "Dashboard",
     "history": "History",
     "dictionary": "Dictionary",
     "settings": "Settings",
-    "guide": "Guide"
+    "guide": "Guide",
+    "recordingBadge": "Recording"
   },
   "dashboard": {
     "ipcSmoke": {

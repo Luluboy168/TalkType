@@ -164,7 +164,20 @@ export interface TranscriptionResult {
 
 // ─── Frontend-only events (HUD ↔ Dashboard) ────────────────────────────────
 
-export type VoiceFlowStateChangedPayload = unknown;
+/**
+ * Cross-window event `voice-flow:state-changed` payload (HUD → Dashboard).
+ * Mirrors `useVoiceFlowStore.status` + `message` snapshot at transition time.
+ * M5 introduces; future: M6 will extend with `enhancing` status.
+ *
+ * `source` field defends against echo loops if HUD ever adds its own listener
+ * (challenger P0-1 / P1-7). Dashboard listener should filter `source !== 'hud'`
+ * to ignore self-emitted events.
+ */
+export interface VoiceFlowStateChangedPayload {
+  status: "idle" | "recording" | "transcribing" | "success" | "error";
+  message: string;
+  source: "hud" | "dashboard";
+}
 
 /**
  * Payload of `transcription:completed` event broadcast to both windows.
