@@ -98,8 +98,8 @@
       "apiKey": {
         "title": "API Key",
         "providerLabel": "Provider",
-        "providerInactiveSuffix": "M6+",
-        "providerInactiveHint": "This provider will be enabled in M6 LLM polish.",
+        "providerInactiveSuffix": "v0.2",
+        "providerInactiveHint": "This provider will be enabled in v0.2.",
         "keyLabel": "API Key",
         "keyPlaceholder": {
           "withPrefix": "Starts with {prefix}",
@@ -117,10 +117,13 @@
         "testSuccess": "✅ Connection OK ({count} models available)",
         "testSuccessNoCount": "✅ Connection OK",
         "privacyDialog": {
-          "title": "Send audio to {provider}",
+          "title": "Send data to {provider}",
           "body": {
             "groq": "TalkType will send your recorded audio to Groq (US) for transcription. Groq's policy retains data for up to 14 days. See https://groq.com/privacy",
-            "generic": "TalkType will send your recorded audio to {provider} for processing. See the provider's privacy policy for data retention details."
+            "openrouter": "Audio is sent to Groq for Whisper transcription, then the polish request goes to OpenRouter and its underlying model provider. Both log the request; OpenRouter does not train on prompts by default, but underlying providers vary.",
+            "nvidia": "Audio is sent to Groq for Whisper transcription, then the polish request goes to NVIDIA NIM. NVIDIA does not use prompts for training and retains telemetry around 30 days. See NVIDIA NIM privacy policy.",
+            "gemini": "Audio is sent to Groq for Whisper transcription, then the polish request goes to Google Gemini. Free tier may use submissions to improve models by default; paid tier does not. Confirm tier in Google AI Studio.",
+            "generic": "TalkType will send data to {provider} for processing. See the provider's privacy policy for data retention details."
           },
           "confirm": "I understand, save",
           "cancel": "Cancel"
@@ -133,12 +136,99 @@
         },
         "testError": {
           "invalidKey": "❌ Invalid API key (401) — check for typos or trailing whitespace",
-          "restrictedKey": "❌ Key has insufficient permissions (403) — ensure the key has Whisper API access",
+          "restrictedKey": "❌ Key has insufficient permissions (403) — ensure the key has the matching API scope",
           "rateLimited": "❌ Rate limited (429), retry in {seconds}s",
           "rateLimitedNoSeconds": "❌ Rate limited (429), retry shortly",
           "network": "❌ Connection failed — check network or HTTPS_PROXY",
           "missingKey": "❌ No API key saved yet",
           "unknown": "❌ Unknown error: {detail}"
+        }
+      },
+      "llmPolish": {
+        "title": "LLM Polish",
+        "enable": "Enable polish",
+        "enableDescription": "Polish transcripts via LLM to fix grammar and fillers. Sends transcribed text to the chosen provider; disabling skips the LLM and pastes the raw transcript.",
+        "providerLabel": "Provider",
+        "modelLabel": "Model",
+        "presetLabel": "Style",
+        "customPromptLabel": "Custom prompt",
+        "preset": {
+          "default": {
+            "label": "Default",
+            "description": "Generic transcript polish; fix grammar / fillers, preserve voice."
+          },
+          "email": {
+            "label": "Email",
+            "description": "Formal tone with paragraph structure for work email."
+          },
+          "chat": {
+            "label": "Chat",
+            "description": "Concise and conversational for chat / messaging."
+          },
+          "code": {
+            "label": "Code",
+            "description": "Preserve code fences and technical terms; do not rewrite code."
+          },
+          "custom": {
+            "label": "Custom",
+            "description": "Use the custom prompt below as the system prompt."
+          }
+        },
+        "customPrompt": {
+          "placeholder": "Enter a custom system prompt (max 1000 chars)",
+          "charCount": "{n} / 1000",
+          "tooLong": "Custom prompt exceeds 1000 chars; please shorten"
+        },
+        "dataFlow": {
+          "audio": "Audio",
+          "whisper": "{provider} Whisper",
+          "polish": "{provider} Polish",
+          "paste": "Paste",
+          "noRetention": "no retention",
+          "withoutPolish": "(polish disabled)"
+        },
+        "testButton": "Test polish",
+        "testing": "Polishing…",
+        "testBefore": "Before",
+        "testAfter": "After",
+        "testFailed": "Polish test failed: {detail}",
+        "testSample": "Um, like, I think this is, you know, alright",
+        "testDisabledTooltip": "Enable LLM polish to test",
+        "disabled": "(disabled)",
+        "banner": {
+          "noKey": "{provider} API key not set; polish path will be skipped — set one in API Key section"
+        },
+        "retry": {
+          "label": "Retry once on failure",
+          "description": "On the first polish failure, retry once with the same provider. If the retry also fails, the raw transcript is pasted and a warning is shown."
+        }
+      },
+      "polishError": {
+        "apiKeyMissing": "{provider} API key not set",
+        "offline": "Offline; cannot reach the LLM provider",
+        "timeout": "Polish request timed out",
+        "tlsFailure": "TLS handshake failed",
+        "dnsFailure": "DNS resolution failed",
+        "connectionRefused": "Connection refused",
+        "networkOther": "Network error",
+        "rateLimited": "Rate limited (retry-after {retryAfter}s)",
+        "apiError": "API error {status}: {extractedMessage}",
+        "parseError": "Response shape mismatch",
+        "busy": "Previous polish still in progress",
+        "invalidPromptLength": "Custom prompt out of range ({actual}/{max})",
+        "safetyBlocked": "Content blocked by provider safety policy",
+        "emptyResponse": "LLM returned an empty response",
+        "truncated": "LLM response truncated; output too short",
+        "implausibleOutput": "LLM response looks implausible (refusal or runaway expansion)",
+        "cancelled": "Cancelled",
+        "disabled": "Polish disabled",
+        "fallbackDisabled": "Polish failed; pasted raw transcript"
+      },
+      "upgradeNote": {
+        "m5ToM6": {
+          "title": "Upgrade to M6 LLM Polish",
+          "body": "M6 adds an LLM polish step with auto-detect default: if you already saved a Groq API key (M3 Whisper), polish is enabled and transcripts are sent to Groq chat completions for cleanup. If you have no LLM provider key set, polish stays off and behavior is unchanged. To opt out, switch the toggle above to OFF. See the per-step data-flow indicator below for the full pipeline.",
+          "dismiss": "Got it"
         }
       },
       "audioInput": {

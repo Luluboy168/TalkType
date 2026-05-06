@@ -21,6 +21,7 @@ import { useI18n } from "vue-i18n";
 
 import SettingsApiKeySection from "@/components/SettingsApiKeySection.vue";
 import SettingsHotkeySection from "@/components/SettingsHotkeySection.vue";
+import SettingsLlmPolishSection from "@/components/SettingsLlmPolishSection.vue";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -186,6 +187,8 @@ onBeforeUnmount(() => {
     <SettingsHotkeySection />
 
     <SettingsApiKeySection />
+
+    <SettingsLlmPolishSection />
 
     <section
       class="space-y-3 rounded-lg border border-border bg-card p-4 text-card-foreground"

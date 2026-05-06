@@ -8,7 +8,9 @@
 // (US) 進行轉錄。Groq 政策資料保留最多 14 天。" The exact body text is
 // localized via `views.settings.apiKey.privacyDialog.body.<provider>`.
 // Falls back to the generic `body.generic` for providers without a
-// dedicated copy (M6 will add OpenAI / Anthropic / Gemini specifics).
+// dedicated copy. M6 chunk 4 added per-provider bodies for `groq`,
+// `openrouter`, `nvidia`, `gemini`. OpenAI / Anthropic stay on the
+// generic copy until v0.2.
 //
 // **Reuse**: this is a dumb component. Parent owns the open state, the
 // selected provider, and the confirm/cancel handlers — keeping the dialog
@@ -63,9 +65,11 @@ const titleText = computed(() =>
 
 /**
  * Localized body. We try a provider-specific key first
- * (`...body.groq`, `...body.openai`, ...) and fall back to a generic
- * message that names the provider. zh-TW + en both ship with `body.groq`;
- * M6 will add the other three with provider-specific privacy details.
+ * (`...body.groq`, `...body.openrouter`, ...) and fall back to a generic
+ * message that names the provider. zh-TW + en ship with provider-specific
+ * bodies for `groq`, `openrouter`, `nvidia`, `gemini` (M6 chunk 4 — the
+ * 4 active polish providers). `openai` / `anthropic` fall through to the
+ * generic body until v0.2 activates them.
  */
 const bodyText = computed(() => {
   const specificKey = `views.settings.apiKey.privacyDialog.body.${props.providerId}`;
