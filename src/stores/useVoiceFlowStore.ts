@@ -60,13 +60,21 @@ import type {
  * High-level voice-flow status. Renamed from SayIt's `HudStatus` because the
  * HUD visual binding is M5's job — this store just owns the logical state.
  *
- * `enhancing` (M6 LLM polish), `cancelled` (Phase 2 nuance), and other
- * states will be added when their owning milestone lands.
+ * M6 chunk 0 adds `'enhancing'` (LLM polish in flight, reached only on the
+ * polish-ON branch of `handleStop` once chunk 2 lands the polish path).
+ * Chunk 0 only extends the type union — the actual `transitionTo('enhancing')`
+ * call lives in chunk 2. The 5 hardcoded 5-state narrowing sites (events.ts,
+ * main.ts, main-window.ts, this file, HudFlowBadge derived type) all updated
+ * in lockstep per F1.
+ *
+ * `cancelled` (Phase 2 nuance) and other states will be added when their
+ * owning milestone lands.
  */
 export type VoiceFlowStatus =
   | "idle"
   | "recording"
   | "transcribing"
+  | "enhancing"
   | "success"
   | "error";
 

@@ -11,6 +11,8 @@
 // of each struct — see `src-tauri/src/settings.rs::HotkeyConfig` for the
 // source-of-truth shape (M4 chunk 3 owns the Rust side).
 
+import type { LlmPromptMode, LlmProviderId } from "./llm";
+
 /**
  * Allowed preset trigger keys for the global hotkey listener. Phase 1 ships
  * preset-only — `Custom { keycode }` and `Combo { modifiers, keycode }` are
@@ -53,21 +55,68 @@ export interface HotkeyConfig {
  * Top-level Settings shape mirroring the Rust `Settings` struct in
  * `src-tauri/src/settings.rs`. The Rust side serializes with
  * `#[serde(rename_all = "camelCase")]` so all field names are camelCase
- * here. v1 only contains `schemaVersion` and `hotkey`; M5-M8 will extend
- * this interface in place.
+ * here. v1 was M4 chunk 3 (`schemaVersion` + `hotkey`); M6 chunk 0 adds 7
+ * optional LLM polish fields (purely additive, schema_version stays 1 so
+ * M5 settings.json forward-loads with all new fields = `undefined`).
  */
 export interface Settings {
-  /** Persisted schema version. v1 = M4 chunk 3. */
+  /** Persisted schema version. v1 = M4 chunk 3 (M6 chunk 0 stays v1). */
   schemaVersion: number;
   /** Global hotkey configuration. Persisted across launches. */
   hotkey: HotkeyConfig;
+
+  // ─── M6 chunk 0 LLM polish fields (Decisions #5 / #7) ───────────────────
+  /**
+   * Tri-state polish gate (Decision #7):
+   *   * `undefined` — auto-detect via `has_credential(provider)` (M5 → M6
+   *                    upgrade default; trust-transitive from existing key)
+   *   * `true`      — explicit ON (surfaces ApiKeyMissing if no key)
+   *   * `false`     — explicit OFF (skip polish, paste raw transcript)
+   */
+  llmPolishEnabled?: boolean;
+  /** Active polish provider id (Decision #3 4 free providers). */
+  llmProvider?: LlmProviderId;
+  /** Pinned model id within the chosen provider (e.g. `"llama-3.3-70b-versatile"`). */
+  llmModelId?: string;
+  /**
+   * Escape hatch for model deprecation (F4): if set, this raw string is
+   * passed verbatim to the provider, bypassing `llmModelId`. UI hidden in
+   * M6 — user edits `settings.json` by hand. Surfaces in v0.2.
+   */
+  llmModelIdOverride?: string;
+  /** Active prompt-mode discriminant (`'default' | 'email' | ... | 'custom'`). */
+  llmPromptMode?: LlmPromptMode;
+  /**
+   * User-provided system prompt when `llmPromptMode === "custom"`. Rust
+   * `validate_custom_prompt` enforces `chars().count() ≤ 1000` (CJK 1 char
+   * = 3 bytes is fine — counting code points, not bytes).
+   */
+  llmCustomPrompt?: string;
+  /**
+   * Tri-state retry toggle (Decision #5):
+   *   * `undefined` or `true` — retry once on transient failure (default)
+   *   * `false`               — no retry, fall back to raw immediately
+   */
+  llmPolishRetryEnabled?: boolean;
 }
 
 /**
  * Sparse update payload for `update_settings` Tauri command. Every
  * field is optional; missing fields are left untouched on the Rust
  * side. M5-M8 will add further `field?: T` here as Settings grows.
+ *
+ * M6 chunk 0 mirrors the 7 LLM polish fields from `Settings`. To explicitly
+ * "clear" a value back to `undefined` the user goes through a chunk-4
+ * dedicated reset flow (a sparse patch with the field absent does NOT clear
+ * the stored value — that matches the Rust `apply_patch` semantics).
  */
 export interface SettingsPatch {
   hotkey?: HotkeyConfig;
+  llmPolishEnabled?: boolean;
+  llmProvider?: LlmProviderId;
+  llmModelId?: string;
+  llmModelIdOverride?: string;
+  llmPromptMode?: LlmPromptMode;
+  llmCustomPrompt?: string;
+  llmPolishRetryEnabled?: boolean;
 }

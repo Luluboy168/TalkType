@@ -134,7 +134,13 @@ if (import.meta.env.DEV) {
     window as unknown as {
       __hudDev?: {
         setStatus: (
-          status: "idle" | "recording" | "transcribing" | "success" | "error",
+          status:
+            | "idle"
+            | "recording"
+            | "transcribing"
+            | "enhancing"
+            | "success"
+            | "error",
           opts?: { message?: string; startedAtMs?: number | null },
         ) => void;
       };

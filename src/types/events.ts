@@ -167,17 +167,27 @@ export interface TranscriptionResult {
 /**
  * Cross-window event `voice-flow:state-changed` payload (HUD → Dashboard).
  * Mirrors `useVoiceFlowStore.status` + `message` snapshot at transition time.
- * M5 introduces; future: M6 will extend with `enhancing` status.
+ * M5 introduced 5 states; M6 chunk 0 extends with `'enhancing'` (LLM polish
+ * in flight). Five-state hardcoded narrowing sites (HUD/Dashboard dev shims,
+ * `useVoiceFlowStore.VoiceFlowStatus` exported alias, `HudFlowBadge` derived
+ * type) all updated in lockstep — F1 audit requires `grep` to confirm every
+ * narrowing case handles `'enhancing'` going forward.
  *
  * `source` field defends against echo loops if HUD ever adds its own listener
  * (challenger P0-1 / P1-7). Dashboard listener should filter `source !== 'hud'`
  * to ignore self-emitted events.
  */
 export interface VoiceFlowStateChangedPayload {
-  status: "idle" | "recording" | "transcribing" | "success" | "error";
+  status: "idle" | "recording" | "transcribing" | "enhancing" | "success" | "error";
   message: string;
   source: "hud" | "dashboard";
 }
+
+// M6 chunk 0: re-export the polish fallback payload so the existing
+// `import { ... } from "@/types/events"` pattern continues to work for
+// listeners of the new `polish:failed-fallback` event without forcing
+// every call site to switch to `@/types/llm`.
+export type { PolishFallbackPayload } from "./llm";
 
 /**
  * Payload of `transcription:completed` event broadcast to both windows.

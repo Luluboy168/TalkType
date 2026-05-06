@@ -65,6 +65,16 @@ const SCHEMA_VERSION: u32 = 1;
 /// `#[serde(rename_all = "camelCase")]` matches the TypeScript `Settings`
 /// interface in `src/types/settings.ts`. M5+ milestones extend this struct
 /// in place (no rename to break existing JSON store contents).
+///
+/// **M6 chunk 0 additions** (purely additive, schema_version stays 1):
+/// 7 optional LLM-polish fields landed as `Option<>` so M5 settings.json
+/// loads forward-compatibly (missing → `None`). Per Decision #7 the polish
+/// gate (`llm_polish_enabled`) is tri-state: `None` = auto-detect via
+/// `has_credential(provider)`, `Some(true)` = explicit ON, `Some(false)` =
+/// explicit OFF. Per Decision #5 the retry toggle (`llm_polish_retry_enabled`)
+/// uses the same tri-state with `None` treated as ON. `llm_provider` and
+/// `llm_prompt_mode` use `String` here in chunk 0 — chunk 1 narrows them
+/// to typed enums (`LlmProviderId`, `PromptMode`) once those land.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -78,6 +88,63 @@ pub struct Settings {
     /// (RightAlt + Hold). M5+ may add other top-level fields here.
     #[serde(default)]
     pub hotkey: HotkeyConfig,
+
+    // ─── M6 chunk 0 LLM polish fields (Decisions #5 / #7) ─────────────────
+    /// Tri-state polish gate (Decision #7):
+    ///   * `None`        — auto-detect via `has_credential(provider)`
+    ///   * `Some(true)`  — explicit ON (even if no key, surfaces ApiKeyMissing)
+    ///   * `Some(false)` — explicit OFF
+    ///
+    /// `Settings::default()` leaves this `None` so M5 → M6 upgrades keep the
+    /// trust-transitive default (Groq Whisper key already present → polish
+    /// auto-enables). Release notes warn the user to override if they want
+    /// transcription-only behavior preserved.
+    #[serde(default)]
+    pub llm_polish_enabled: Option<bool>,
+
+    /// Provider id for polish (Decision #3 4 free providers: groq /
+    /// openrouter / nvidia / gemini). Stored as `String` in chunk 0 so the
+    /// settings struct compiles before chunk 1's typed `LlmProviderId`
+    /// enum lands; chunk 1 narrows the type without changing the wire shape.
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+
+    /// Pinned model id within the chosen provider (e.g.
+    /// `"llama-3.3-70b-versatile"` for Groq). Each provider ships a default
+    /// + an alternate (chunk 1's `LLM_MODEL_LIST` registry).
+    #[serde(default)]
+    pub llm_model_id: Option<String>,
+
+    /// Escape hatch for model deprecation (F4): if set, this raw string is
+    /// passed to the provider verbatim as the model id, bypassing
+    /// `llm_model_id`. Hidden from the M6 Settings UI; user edits
+    /// `settings.json` by hand. UI exposure deferred to v0.2.
+    #[serde(default)]
+    pub llm_model_id_override: Option<String>,
+
+    /// Prompt-mode selector. Five modes (`default | email | chat | code |
+    /// custom`); `custom` reads `llm_custom_prompt`. Stored as `String`
+    /// in chunk 0; chunk 1 narrows to a typed `PromptMode` enum.
+    #[serde(default)]
+    pub llm_prompt_mode: Option<String>,
+
+    /// User-provided system prompt when `llm_prompt_mode == "custom"`.
+    /// Validated by chunk 1's `validate_custom_prompt` (chars().count() ≤
+    /// 1000) so CJK content (3 bytes/char) fits the same character budget
+    /// as ASCII.
+    #[serde(default)]
+    pub llm_custom_prompt: Option<String>,
+
+    /// Tri-state retry toggle (Decision #5):
+    ///   * `None` or `Some(true)` — retry once on transient failure (default)
+    ///   * `Some(false)`          — no retry, fall back to raw immediately
+    ///
+    /// `None` is treated as ON in `useVoiceFlowStore.handleStop` so the
+    /// retry-same path covers ~90% of transient failures (network blip,
+    /// rate limit overshoot) without surfacing settings churn to the user.
+    /// Retry-other (secondary provider) is deferred to v0.2.
+    #[serde(default)]
+    pub llm_polish_retry_enabled: Option<bool>,
 }
 
 fn default_schema_version() -> u32 {
@@ -89,6 +156,16 @@ impl Default for Settings {
         Self {
             schema_version: SCHEMA_VERSION,
             hotkey: HotkeyConfig::default(),
+            // M6 chunk 0: all LLM polish fields default to `None` so the
+            // tri-state semantics (Decisions #5 / #7) treat fresh installs
+            // identically to M5 → M6 upgrades that have a stored Groq key.
+            llm_polish_enabled: None,
+            llm_provider: None,
+            llm_model_id: None,
+            llm_model_id_override: None,
+            llm_prompt_mode: None,
+            llm_custom_prompt: None,
+            llm_polish_retry_enabled: None,
         }
     }
 }
@@ -106,8 +183,20 @@ impl Default for Settings {
 pub struct SettingsPatch {
     /// Replace the entire `hotkey` config when present.
     pub hotkey: Option<HotkeyConfig>,
-    // M5+ adds further `Option<...>` fields here. Each new field must
-    // appear in `apply_patch` below.
+
+    // ─── M6 chunk 0 LLM polish patch fields ──────────────────────────────
+    // Each mirrors the matching Settings field. The `Option<Option<T>>`
+    // pattern is intentionally NOT used: a sparse patch with the field
+    // absent leaves the existing value untouched (`None` in the patch =
+    // "no change"). To explicitly clear a value back to its tri-state
+    // `None`, the user goes through a dedicated reset flow (chunk 4 UI).
+    pub llm_polish_enabled: Option<bool>,
+    pub llm_provider: Option<String>,
+    pub llm_model_id: Option<String>,
+    pub llm_model_id_override: Option<String>,
+    pub llm_prompt_mode: Option<String>,
+    pub llm_custom_prompt: Option<String>,
+    pub llm_polish_retry_enabled: Option<bool>,
 }
 
 // ─── Error ─────────────────────────────────────────────────────────────────
@@ -295,7 +384,30 @@ fn apply_patch(settings: &mut Settings, patch: &SettingsPatch) {
     if let Some(hotkey) = patch.hotkey {
         settings.hotkey = hotkey;
     }
-    // M5+ adds further patch.field merges here.
+    // M6 chunk 0 LLM polish merge. Each field is independently sparse —
+    // a patch with only `llm_provider: Some(...)` leaves every other LLM
+    // field untouched. `clone()` because `String` is not `Copy`.
+    if let Some(enabled) = patch.llm_polish_enabled {
+        settings.llm_polish_enabled = Some(enabled);
+    }
+    if let Some(provider) = patch.llm_provider.as_ref() {
+        settings.llm_provider = Some(provider.clone());
+    }
+    if let Some(model_id) = patch.llm_model_id.as_ref() {
+        settings.llm_model_id = Some(model_id.clone());
+    }
+    if let Some(model_override) = patch.llm_model_id_override.as_ref() {
+        settings.llm_model_id_override = Some(model_override.clone());
+    }
+    if let Some(mode) = patch.llm_prompt_mode.as_ref() {
+        settings.llm_prompt_mode = Some(mode.clone());
+    }
+    if let Some(custom) = patch.llm_custom_prompt.as_ref() {
+        settings.llm_custom_prompt = Some(custom.clone());
+    }
+    if let Some(retry) = patch.llm_polish_retry_enabled {
+        settings.llm_polish_retry_enabled = Some(retry);
+    }
 }
 
 /// Deserialize a JSON value into `Settings`. Returns
@@ -394,6 +506,7 @@ mod tests {
                 trigger_key: TriggerKey::LeftControl,
                 trigger_mode: TriggerMode::Toggle,
             }),
+            ..SettingsPatch::default()
         };
         apply_patch(&mut settings, &patch);
         assert_eq!(settings.hotkey.trigger_key, TriggerKey::LeftControl);
@@ -464,5 +577,76 @@ mod tests {
         let json = r#"{"hotkey":{"triggerKey":"left-shift","triggerMode":"toggle"}}"#;
         let patch: SettingsPatch = serde_json::from_str(json).expect("hotkey patch");
         assert_eq!(patch.hotkey.unwrap().trigger_key, TriggerKey::LeftShift);
+    }
+
+    // ─── M6 chunk 0 LLM polish field tests ────────────────────────────────
+
+    #[test]
+    fn apply_patch_merges_llm_polish_enabled_explicit_off() {
+        // Decision #7 tri-state: Some(false) flips the explicit-off bit so
+        // the chunk-2 useVoiceFlowStore handleStop branches to the raw-paste
+        // path even if the user has a Groq key stored.
+        let mut settings = Settings::default();
+        assert_eq!(settings.llm_polish_enabled, None);
+        let patch = SettingsPatch {
+            llm_polish_enabled: Some(false),
+            ..SettingsPatch::default()
+        };
+        apply_patch(&mut settings, &patch);
+        assert_eq!(settings.llm_polish_enabled, Some(false));
+        // Other LLM fields stay `None` — patch was sparse.
+        assert_eq!(settings.llm_provider, None);
+        assert_eq!(settings.llm_polish_retry_enabled, None);
+    }
+
+    #[test]
+    fn settings_loads_legacy_m5_json_without_llm_fields() {
+        // M5 → M6 upgrade scenario: settings.json on disk only has
+        // `hotkey` (M4 chunk 3 schema). All M6 LLM fields must default to
+        // `None` so chunk 2's tri-state auto-detect kicks in (no surprise
+        // behavior change for users mid-upgrade).
+        let value = serde_json::json!({
+            "schemaVersion": 1,
+            "hotkey": { "triggerKey": "right-alt", "triggerMode": "hold" }
+        });
+        let parsed = load_from_value(value).expect("legacy M5 JSON parses");
+        assert_eq!(parsed.llm_polish_enabled, None);
+        assert_eq!(parsed.llm_provider, None);
+        assert_eq!(parsed.llm_model_id, None);
+        assert_eq!(parsed.llm_model_id_override, None);
+        assert_eq!(parsed.llm_prompt_mode, None);
+        assert_eq!(parsed.llm_custom_prompt, None);
+        assert_eq!(parsed.llm_polish_retry_enabled, None);
+    }
+
+    #[test]
+    fn apply_patch_sparse_llm_provider_leaves_other_fields_untouched() {
+        // The chunk-4 Settings UI patches one field at a time. A patch with
+        // only `llm_provider` set must NOT clobber pre-existing values for
+        // the other 6 LLM fields.
+        let mut settings = Settings {
+            llm_polish_enabled: Some(true),
+            llm_provider: Some("groq".to_string()),
+            llm_model_id: Some("llama-3.3-70b-versatile".to_string()),
+            llm_model_id_override: None,
+            llm_prompt_mode: Some("default".to_string()),
+            llm_custom_prompt: None,
+            llm_polish_retry_enabled: Some(false),
+            ..Settings::default()
+        };
+        let patch = SettingsPatch {
+            llm_provider: Some("openrouter".to_string()),
+            ..SettingsPatch::default()
+        };
+        apply_patch(&mut settings, &patch);
+        assert_eq!(settings.llm_provider, Some("openrouter".to_string()));
+        // Untouched fields keep their pre-patch values.
+        assert_eq!(settings.llm_polish_enabled, Some(true));
+        assert_eq!(
+            settings.llm_model_id,
+            Some("llama-3.3-70b-versatile".to_string())
+        );
+        assert_eq!(settings.llm_prompt_mode, Some("default".to_string()));
+        assert_eq!(settings.llm_polish_retry_enabled, Some(false));
     }
 }

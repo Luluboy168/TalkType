@@ -60,6 +60,19 @@ export const SETTINGS_UPDATED = "settings:updated" as const;
 export const HISTORY_ADDED = "history:added" as const;
 export const VOCABULARY_CHANGED = "vocabulary:changed" as const;
 
+// ─── M6: LLM polish fallback signal ────────────────────────────────────────
+
+/**
+ * Emitted by Rust `llm_polish` when polish fell back to raw transcript
+ * paste — either polish was attempted and the LLM round-trip failed
+ * (Decision #5 retry toggle decides whether retry-same fires before
+ * fallback) or the input failed a sanity check (F8 / F9 / F11). Payload
+ * shape: `PolishFallbackPayload` in `src/types/llm.ts`. The chunk-3 HUD
+ * uses this to flip the success bubble to amber (warning) for the
+ * unified 1500 ms linger window (Decision #8).
+ */
+export const POLISH_FAILED_FALLBACK = "polish:failed-fallback" as const;
+
 // ─── Frontend-only events (HUD ↔ Dashboard) ────────────────────────────────
 
 export const VOICE_FLOW_STATE_CHANGED = "voice-flow:state-changed" as const;
@@ -90,6 +103,7 @@ export const EVENT_NAMES = {
   SETTINGS_UPDATED,
   HISTORY_ADDED,
   VOCABULARY_CHANGED,
+  POLISH_FAILED_FALLBACK,
   VOICE_FLOW_STATE_CHANGED,
   TRANSCRIPTION_COMPLETED,
 } as const;
