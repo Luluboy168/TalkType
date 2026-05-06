@@ -357,9 +357,11 @@
 
 ## M6：LLM Polish 多 Provider
 
-> **Deliverable**：4 個 LLM provider（Groq/OpenAI/Anthropic/Gemini）都能跑 polish、可開關、預設開、Rust-side fetch（API key 不過 IPC）
+> **狀態**：📋 spec refined 2026-05-06、user 確認 8 decisions、see [.claude/sessions/2026-05-06-m6-llm-polish-kickoff.md](../../.claude/sessions/2026-05-06-m6-llm-polish-kickoff.md) 為 implementer authoritative source-of-truth。本 section 部分 **outdated**（OpenAI/Anthropic refs 已被 OpenRouter/NVIDIA NIM 取代、加 retry toggle、tri-state default `Option<bool>`）。chunk 5 收尾時 sync。
+>
+> **Deliverable**：4 free LLM provider（Groq/Gemini/OpenRouter/NVIDIA NIM）都能跑 polish、可開關、tri-state 動態預設、Rust-side fetch（API key 不過 IPC）；OpenAI + Anthropic defer 到 v0.2。
 
-### 設計決策（2026-05-03 Typeless / 競品 research + Q1 (a) review 後定案）
+### 設計決策（2026-05-03 Typeless / 競品 research + Q1 (a) review 後定案、2026-05-06 user 確認 8 decisions 後 refine）
 
 - **架構大轉**：原計畫的 `src/lib/{llmProvider,enhancer,modelRegistry}.ts` 全部移到 Rust（`plugins/llm_polish/`）。理由：
   - Q1 (a) 守住 "API key 從不在前端" 不變式
