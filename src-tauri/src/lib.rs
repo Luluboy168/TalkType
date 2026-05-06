@@ -56,7 +56,9 @@ use tauri::{
     AppHandle, Emitter, Manager, RunEvent, WindowEvent,
 };
 
-use plugins::{audio_recorder, clipboard_paste, credentials, hotkey_listener, hud, transcription};
+use plugins::{
+    audio_recorder, clipboard_paste, credentials, hotkey_listener, hud, llm_polish, transcription,
+};
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -248,6 +250,12 @@ pub fn run() {
         // (stripped in the cfg(not(debug_assertions)) branch below).
         hud::position_hud_for_active_monitor,
         hud::set_hud_visible_for_dev,
+        // M6 chunk 1: LLM polish. `polish_text` invokes one of 4 free-tier
+        // providers (Groq / OpenRouter / NVIDIA / Gemini per Decision #3)
+        // with a per-provider timeout (3 s Groq / 15 s others). Concurrent
+        // invocations are rejected with `PolishError::Busy` (F24); retry
+        // orchestration lives on the frontend per Decision #5.
+        llm_polish::polish_text,
     ]);
 
     #[cfg(not(debug_assertions))]
@@ -283,6 +291,8 @@ pub fn run() {
         // in release builds so the symbol does not exist; an IPC call from a
         // packaged build returns an unknown-command error.
         hud::position_hud_for_active_monitor,
+        // M6 chunk 1: LLM polish. See debug branch above for full context.
+        llm_polish::polish_text,
     ]);
 
     let app = builder
@@ -309,6 +319,11 @@ pub fn run() {
             // can fail on TLS init). Doing it here lets the error propagate
             // through the `setup` Result chain.
             app.manage(transcription::TranscriptionState::new()?);
+
+            // M6 chunk 1: LLM polish state. Same fallibility profile as
+            // `TranscriptionState::new()` (reqwest client builder); failures
+            // propagate through the setup Result chain.
+            app.manage(llm_polish::LlmPolishState::new()?);
 
             // M4 chunk 2: the HUD must not be considered for OS focus chain
             // — otherwise paste's `SetForegroundWindow(target_hwnd)` can be

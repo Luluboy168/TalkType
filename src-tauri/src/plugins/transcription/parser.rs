@@ -6,12 +6,17 @@
 // Public surface (pub(super)):
 //
 //   * `format_whisper_prompt` — vocabulary list → Whisper prompt with the
-//     50-term + 600-char dual cap from M3 Q3.
+//     50-term + 600-char dual cap. M6 chunk 1 extracted the cap policy into
+//     `crate::plugins::vocabulary::cap_terms` (F10) so the same caps apply
+//     to LLM polish system-prompt vocabulary injection without duplicating
+//     the truncation logic.
 //   * `parse_groq_response` + `ParsedResponse` — `verbose_json` deserializer
 //     extracting the trimmed text plus the per-segment minimum
 //     `no_speech_prob`.
 
 use serde::Deserialize;
+
+use crate::plugins::vocabulary;
 
 /// Max characters in the formatted vocabulary prompt body. Groq's
 /// undocumented prompt limit is ~896 chars; 600 leaves headroom for the
@@ -26,30 +31,15 @@ pub(super) const VOCABULARY_TERM_CAP: usize = 50;
 /// 50-term + 600-char dual cap applied. Returns `None` if the list is empty
 /// or every term was rejected by the cap.
 ///
-/// Truncation policy: take the prefix of the list. Once a term would push
-/// the running char count past 600, stop — never split a term in the
-/// middle (Mandarin terms would be unreadable mid-character). The first
-/// term is added without a separator; subsequent terms cost
-/// `2 + char_count` (", " + chars) toward the cap.
-pub(super) fn format_whisper_prompt(vocabulary: Option<&[String]>) -> Option<String> {
-    let terms = vocabulary?;
+/// Truncation policy delegates to `vocabulary::cap_terms`. The first term is
+/// added without a separator; subsequent terms cost `2 + char_count` (", "
+/// + chars) toward the cap. CJK terms count by chars not bytes.
+pub(super) fn format_whisper_prompt(vocabulary_terms: Option<&[String]>) -> Option<String> {
+    let terms = vocabulary_terms?;
     if terms.is_empty() {
         return None;
     }
-
-    let mut accepted: Vec<&str> = Vec::new();
-    let mut total_chars = 0usize;
-    for term in terms.iter().take(VOCABULARY_TERM_CAP) {
-        // ", " separator after the first term; chars (not bytes) so
-        // multi-byte UTF-8 terms are counted by visible grapheme count
-        // approximation rather than byte length.
-        let added_chars = term.chars().count() + if accepted.is_empty() { 0 } else { 2 };
-        if total_chars + added_chars > VOCABULARY_CHAR_CAP {
-            break;
-        }
-        total_chars += added_chars;
-        accepted.push(term.as_str());
-    }
+    let accepted = vocabulary::cap_terms(terms, VOCABULARY_TERM_CAP, VOCABULARY_CHAR_CAP);
     if accepted.is_empty() {
         return None;
     }
