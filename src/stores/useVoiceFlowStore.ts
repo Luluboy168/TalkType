@@ -1,20 +1,41 @@
 // Voice flow store — orchestrates the HUD's hotkey → record → transcribe →
-// paste pipeline (M4 chunk 3, evolved in M5 chunk 1).
+// (optional polish) → paste pipeline (M4 chunk 3, evolved in M5 chunk 1, M6
+// chunk 2).
 //
-// **Scope (M4 chunk 3 + M5 chunk 1)**:
-//   * Hold-mode: hotkey down → start record / hotkey up → stop + transcribe + paste
+// **Scope (M4 chunk 3 + M5 chunk 1 + M6 chunk 2)**:
+//   * Hold-mode: hotkey down → start record / hotkey up → stop + transcribe
+//                                                          + (polish?) + paste
 //   * Toggle-mode: each press XORs the recording state (driven by Rust side)
 //   * ESC during recording → cancel without paste
+//   * ESC during enhancing → no-op + console.warn (M6 limitation; the
+//     reqwest cancel channel is deferred to v0.2 — F23)
 //   * `audio:recording-aborted` → surface user-facing error (max_size / mic_unplug)
 //   * `dismissError()` → user-driven recovery (HUD click-to-dismiss in M5 chunk 2)
 //   * Cross-window: emit `voice-flow:state-changed` on every transition
 //     (HUD → Dashboard sidebar; explicit `emitTo("main-window", ...)` per P0-1)
+//   * **M6 polish branch (Decisions #5 / #7 / #8)**:
+//     - F21 polishEnabledAtStart snapshot at handleStart time (settings
+//       changes mid-flow do not affect the in-flight pipeline)
+//     - F22 tri-state polish gate: `Some(true)` always polish, `Some(false)`
+//       always skip, `None` auto-detect via `has_credential(provider)`
+//     - F25 polishWarning ref lifecycle: set on fallback-to-raw, cleared on
+//       next idle/recording transition (chunk-3 HUD reads it for amber-vs-
+//       green success bubble)
+//     - F34 retry orchestration: frontend invokes `polish_text` twice on
+//       transient errors (network / 5xx / Busy) when retry is enabled
+//       (`Settings.llmPolishRetryEnabled` — `None` and `Some(true)` mean ON,
+//       `Some(false)` means OFF). Non-retryable variants (ApiKeyMissing /
+//       SafetyBlocked / etc.) skip retry. retry attempts are sequential
+//       (the second invoke awaits the first; the Rust BusyGuard makes this
+//       safe even if the user double-presses during the gap).
+//     - Decision #8 SUCCESS_LINGER_MS = 1500 ms (M5 1000 → M6 1500 to
+//       give the user time to read the polish-failed warning).
 //
 // **Out of scope** (deferred to later milestones — do NOT add here):
-//   * HUD visual mode wiring (M5 chunk 2 owns `HudOverlay.vue` 4 visual states)
+//   * HUD visual mode wiring (M5 chunk 2 owns `HudOverlay.vue` 4 visual states;
+//     M6 chunk 3 extends with `enhancing` + success-warning amber)
 //   * Audio mute/restore on recording (M5 — `mute_on_recording` setting)
 //   * Sound effects (Phase 2)
-//   * LLM polish (M6 — `polish_text` command)
 //   * History persist (M8 — `add_history` SQLite command)
 //   * Vocabulary read-through (M8 — `get_vocabulary`)
 //
@@ -23,10 +44,13 @@
 //                                  ╲
 //                                   ╲──hotkey:released/toggled-off──▶ transcribing
 //                                                                  ╲
-//                                                                   ╲──ok──▶ success ──1s──▶ idle
-//                                                                    ╲
-//                                                                     ╲──err──▶ error ──3s──▶ idle
+//                                                                   ╲──polish ON──▶ enhancing ──▶ success
+//                                                                   ╲                            (1.5 s linger)
+//                                                                    ╲──polish OFF──▶ success ──1.5s──▶ idle
+//                                                                     ╲
+//                                                                      ╲──err──▶ error ──3s──▶ idle
 //   recording ──escape:pressed──▶ idle (cancel; clears WAV buffer)
+//   enhancing ──escape:pressed──▶ no-op (M6 limitation — F23)
 //   error ──user click / dismissError()──▶ idle (M5 chunk 2 wires UI)
 //   * → error (audio:recording-aborted) when Rust auto-aborts (size cap / mic unplug)
 //
@@ -34,7 +58,11 @@
 // see a consistent snapshot. The Rust side already has its own
 // `transcribe_busy` AtomicBool guard (see `transcription/mod.rs`) so a
 // double-press during transcribing returns `Busy` and lands in the error
-// branch — no extra debounce needed here.
+// branch — no extra debounce needed here. Polish has its own
+// `polish_busy` AtomicBool (see `llm_polish/mod.rs::BusyGuard`); a fresh
+// hotkey press during enhancing makes the next polish attempt return
+// `PolishError::Busy`, which our retry classifier treats as transient
+// (folds to `polish_failure_with_warning`).
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { defineStore } from "pinia";
@@ -55,6 +83,8 @@ import type {
   TranscriptionResult,
   VoiceFlowStateChangedPayload,
 } from "@/types/events";
+import type { PolishResult } from "@/types/llm";
+import type { Settings } from "@/types/settings";
 
 /**
  * High-level voice-flow status. Renamed from SayIt's `HudStatus` because the
@@ -78,8 +108,15 @@ export type VoiceFlowStatus =
   | "success"
   | "error";
 
-/** How long the `success` state stays visible before transitioning back to idle. */
-const SUCCESS_LINGER_MS = 1000;
+/**
+ * How long the `success` state stays visible before transitioning back to
+ * idle. M5 was 1000 ms; M6 chunk 2 bumped to 1500 ms (Decision #8) — the
+ * post-M5 retro flagged the linger as too short, and M6 introduced an extra
+ * `enhancing` stage plus the polish-failed warning bubble that wants a beat
+ * longer to be readable. Applied uniformly to all success paths (polish ON,
+ * polish OFF, polish-failed-fallback) so the HUD timing stays predictable.
+ */
+const SUCCESS_LINGER_MS = 1500;
 /** How long the `error` state stays visible before transitioning back to idle. */
 const ERROR_LINGER_MS = 3000;
 
@@ -110,6 +147,109 @@ async function pasteTextSerial(text: string): Promise<void> {
   await pasteChain;
 }
 
+/**
+ * F34 retry classifier — module-private helper for `runPolishWithRetry`.
+ * Mirrors the Rust reference predicate `plugins::llm_polish::providers::
+ * is_retryable` (which is intentionally kept `#[allow(dead_code)]` on the
+ * Rust side because Decision #5 routes retry orchestration through the
+ * frontend instead of the Rust orchestrator).
+ *
+ * **Wire format**: Rust serializes `PolishError` to a flat string via the
+ * manual `Serialize` impl (see `error.rs::PolishError::serialize`). Each
+ * variant emits its `#[error("...")]` `Display` output verbatim. The Tauri
+ * `invoke()` rejection in JS is the resulting string.
+ *
+ * **Variant Display strings** (from `error.rs`):
+ *   * Retryable (transient — caller should retry once when enabled):
+ *     - Timeout(N)            → `"Request timed out after Ns"`
+ *     - RateLimited           → `"Rate limited (retry after ...s)"`
+ *     - NetworkOther(s)       → `"Other network error: ..."`
+ *     - ConnectionRefused     → `"Connection refused by server"`
+ *     - DnsFailure(s)         → `"DNS lookup failed: ..."`
+ *     - TlsFailure(s)         → `"TLS handshake failed: ..."`
+ *     - Offline               → `"Network appears offline"`
+ *     - Busy                  → `"A previous polish request is still in progress"`
+ *       (F24: a hotkey burst during enhancing is the typical Busy source —
+ *        the rejected attempt should retry once the in-flight polish is done)
+ *
+ *   * Non-retryable (caller skips retry, falls back to raw immediately):
+ *     - ApiKeyMissing         → `"API key missing for provider ..."`
+ *     - Credentials(s)        → `"Credentials error: ..."`
+ *     - Disabled              → `"LLM polish is disabled in settings"`
+ *     - Cancelled             → `"Polish cancelled"`
+ *     - EmptyInput            → `"Empty input — nothing to polish"`
+ *     - InvalidPromptLength   → `"Custom prompt is too long ..."`
+ *     - ApiError              → `"Provider returned error N: ..."`
+ *       (4xx / non-429 — retrying won't change a malformed request; 5xx
+ *        per Decision #5 is also non-retryable here because the retry-same
+ *        strategy doesn't help recover from the server-side condition.
+ *        Hindsight: M9 dogfood may flip 5xx to retryable if data shows it
+ *        helps.)
+ *     - EmptyResponse         → `"Provider returned an empty response"`
+ *     - Truncated             → `"Polished output truncated ..."`
+ *     - ImplausibleOutput     → `"Polished output is implausible ..."`
+ *     - SafetyBlocked         → `"Provider blocked the response: ..."`
+ *     - ParseError            → `"Failed to parse provider response: ..."`
+ *
+ * The match runs case-insensitive on `lower(message)` for resilience to
+ * minor Rust wording shifts (the variant prefixes are unlikely to drift,
+ * but a casing change in `#[error(...)]` shouldn't break retry policy).
+ */
+function isRetryablePolishError(err: unknown): boolean {
+  // Tauri rejections come through as strings (manual Serialize impl on
+  // PolishError) but defensively handle Error / object shapes too.
+  const raw = (() => {
+    if (typeof err === "string") return err;
+    if (err instanceof Error) return err.message;
+    if (err && typeof err === "object" && "message" in err) {
+      const msg = (err as { message: unknown }).message;
+      if (typeof msg === "string") return msg;
+    }
+    return String(err);
+  })();
+  const lower = raw.toLowerCase();
+
+  // Non-retryable — match the start of Display strings from error.rs.
+  // Listed first because it short-circuits early when the error is one
+  // of the typical user-action-required variants.
+  const nonRetryablePatterns: ReadonlyArray<string> = [
+    "api key missing", // ApiKeyMissing
+    "credentials error", // Credentials
+    "llm polish is disabled", // Disabled
+    "polish cancelled", // Cancelled
+    "empty input", // EmptyInput
+    "custom prompt is too long", // InvalidPromptLength
+    "provider returned error", // ApiError (any non-429)
+    "provider returned an empty response", // EmptyResponse
+    "polished output truncated", // Truncated
+    "polished output is implausible", // ImplausibleOutput
+    "provider blocked the response", // SafetyBlocked
+    "failed to parse provider response", // ParseError
+  ];
+  for (const pattern of nonRetryablePatterns) {
+    if (lower.includes(pattern)) return false;
+  }
+
+  // If we got here and the message looks like one of the retryable
+  // variants, retry. Anything else (unknown future variants, malformed
+  // strings) defaults to NON-retryable to be conservative — better to
+  // skip retry once than to thrash an unknown failure mode.
+  const retryablePatterns: ReadonlyArray<string> = [
+    "request timed out", // Timeout
+    "rate limited", // RateLimited
+    "other network error", // NetworkOther
+    "connection refused", // ConnectionRefused
+    "dns lookup failed", // DnsFailure
+    "tls handshake failed", // TlsFailure
+    "network appears offline", // Offline
+    "previous polish request is still in progress", // Busy (F24)
+  ];
+  for (const pattern of retryablePatterns) {
+    if (lower.includes(pattern)) return true;
+  }
+  return false;
+}
+
 export const useVoiceFlowStore = defineStore("voiceFlow", () => {
   /** Logical voice-flow state. Read-only outside the store; mutated only via
    * `transitionTo`. */
@@ -133,6 +273,41 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
    * Module-private: not exposed in the store's public surface.
    */
   let currentSession = 0;
+
+  /**
+   * F21 — polish-on/off snapshot at handleStart time. Captured per-session
+   * (NOT per-store) so a settings flip mid-flow can't repurpose an in-flight
+   * pipeline (e.g. user toggling polish OFF while transcribing finishes still
+   * runs the polish branch the press originally intended). The snapshot is
+   * resolved against the tri-state Decision #7 semantics:
+   *
+   *   * `Settings.llmPolishEnabled === true`     → always ON
+   *   * `Settings.llmPolishEnabled === false`    → always OFF
+   *   * `Settings.llmPolishEnabled === undefined`→ auto-detect via
+   *                                                 `has_credential(provider)`
+   *
+   * Map keyed by session id so concurrent sessions (rapid press during
+   * transcribing — see existing test) each have their own snapshot. The
+   * older-session entry stays alive until its handleStop reads it; we
+   * delete the entry there to prevent unbounded growth.
+   *
+   * Module-private; reset between test cases via `setActivePinia` rebuild.
+   */
+  const polishEnabledAtStart = new Map<number, boolean>();
+
+  /**
+   * F25 — polishWarning ref. Set to `true` by handleStop's polish branch
+   * when the polish pipeline fell back to raw transcript paste (single
+   * attempt failed and retry disabled, OR both attempts failed when retry
+   * enabled, OR ApiKeyMissing on explicit Some(true)). Cleared when
+   * `transitionTo` moves into 'idle' or 'recording' so a fresh recording
+   * doesn't carry the previous session's warning into its success bubble.
+   *
+   * Chunk-3 HUD reads this to switch the success bubble between green
+   * CheckCircle2 (warning=false) and amber AlertTriangle (warning=true).
+   * Exposed as a readonly ref via the store's public surface.
+   */
+  const polishWarning = ref<boolean>(false);
 
   /** Hotkey-down → start the voice flow. Captures the foreground HWND FIRST
    * so the later paste knows which window to send Ctrl+V to. The capture
@@ -179,6 +354,17 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
       }
       await invoke<void>("capture_target_window");
       await invoke<void>("start_recording", { deviceName: null });
+
+      // F21: snapshot polish-gating at hotkey-press time. Decoupled from
+      // the core recording flow so a settings read failure cannot prevent
+      // recording — fail-closed (polish OFF). Settings change mid-flow do
+      // not affect this in-flight pipeline. The map entry is consumed
+      // (and removed) by the matching handleStop call.
+      polishEnabledAtStart.set(
+        mySession,
+        await resolvePolishEnabledAtStart(),
+      );
+
       // If a newer handleStart raced ahead while we awaited Tauri commands,
       // bail without writing status — the newer session owns it.
       if (mySession !== currentSession) return;
@@ -189,17 +375,106 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
     }
   }
 
-  /** Hotkey-up → stop recording → transcribe → paste. Phase 1 path only:
-   * raw Whisper text, no LLM polish (M6 owns), no history persist (M8).
+  /**
+   * F21 + F22 polish gating resolver. Fetches the settings snapshot via
+   * `get_settings` and resolves the tri-state per Decision #7. Wrapped in
+   * try/catch so any IPC failure (Settings store unavailable / corrupted
+   * JSON / lock poisoned) folds to "polish OFF" — fail-closed protects the
+   * core recording flow from settings-layer regressions.
+   *
+   * Auto-detect path (`Settings.llmPolishEnabled === undefined`) issues
+   * `has_credential(provider)` which is the only credentials command that
+   * doesn't expose secrets to the frontend (returns boolean only). The
+   * provider id falls back to "groq" when settings are unavailable so the
+   * M5→M6 trust-transitive default is preserved (Decision #7 release notes).
+   *
+   * **API key invariant #1**: this function MUST NOT call the credentials
+   * read function that returns the actual key string. `has_credential`
+   * (boolean) is the only frontend-allowed lookup. Reviewer grep over `src/`
+   * for that read should remain empty (only the `_preview` masking variant
+   * appears in M3 SettingsApiKeySection.vue).
+   */
+  async function resolvePolishEnabledAtStart(): Promise<boolean> {
+    // Defensive: invoke<Settings> can both reject (Rust error) AND resolve
+    // to a non-Settings value when the test harness doesn't queue a mock
+    // (default `vi.fn()` resolves to `undefined`). Treat both as "no
+    // settings" → polish OFF (fail-closed). This explicit `null` fallback
+    // also keeps the eslint `no-useless-assignment` rule happy because the
+    // initial binding is overwritten before being read.
+    let settings: Settings | null;
+    try {
+      settings = (await invoke<Settings>("get_settings")) ?? null;
+    } catch (err) {
+      console.warn(
+        "[voice-flow] get_settings failed during polish snapshot, defaulting OFF",
+        err,
+      );
+      return false;
+    }
+
+    if (!settings) return false;
+
+    const explicit = settings.llmPolishEnabled;
+    if (explicit === true) {
+      // Decision #7 Some(true): user-explicit ON. Polish runs even if no
+      // key is stored — the Rust side surfaces ApiKeyMissing → fallback
+      // raw paste + warning. This intentional behavior lets the user see
+      // the warning and remediate via Settings rather than silently being
+      // unable to use the polish toggle they switched on.
+      return true;
+    }
+    if (explicit === false) {
+      // Decision #7 Some(false): user-explicit OFF. Skip polish entirely.
+      return false;
+    }
+
+    // Decision #7 None — auto-detect via has_credential. Fail-closed if the
+    // capability check itself errors so a transient credentials backend
+    // glitch doesn't push polish onto a user who never opted in.
+    const provider = settings.llmProvider ?? "groq";
+    try {
+      return (await invoke<boolean>("has_credential", { provider })) === true;
+    } catch (err) {
+      console.warn(
+        "[voice-flow] has_credential failed during polish snapshot, defaulting OFF",
+        err,
+      );
+      return false;
+    }
+  }
+
+  /** Hotkey-up → stop recording → transcribe → (polish?) → paste.
    *
    * Stop is **session-scoped**: if a newer handleStart has run, our
-   * terminal transitions (transcribing/success/idle) skip so we don't
-   * clobber the new recording's status. Transcribe + paste still run in
-   * background so the user gets their audio transcribed + pasted; only
-   * the visible state machine is gated. */
+   * terminal transitions (transcribing/enhancing/success/idle) skip so we
+   * don't clobber the new recording's status. Transcribe + paste still run
+   * in background so the user gets their audio transcribed + pasted; only
+   * the visible state machine is gated.
+   *
+   * **M6 polish branch (F22 + F34)**: when `polishEnabledAtStart` for this
+   * session is true, we transition to `enhancing` and invoke `polish_text`.
+   * Decision #5 retry: on transient errors (network / 5xx / Busy) and when
+   * the user has retry enabled (default), we invoke `polish_text` a second
+   * time with `attempt: 2`. Both attempts share the Rust `polish_busy`
+   * BusyGuard — they're sequential by `await`, so the second invoke sees
+   * the guard released. If both attempts fail, OR if a non-retryable
+   * variant came back (ApiKeyMissing / SafetyBlocked / etc.), OR if retry
+   * is disabled, we fall back to raw paste + set `polishWarning` for the
+   * chunk-3 HUD's amber success bubble.
+   *
+   * Whichever text ends up pasted (raw OR polished) goes through
+   * `pasteTextSerial` so the OS clipboard never races between the polish
+   * fallback and an in-flight transcribe-paste from a parallel session.
+   */
   async function handleStop(): Promise<void> {
     if (status.value !== "recording") return;
     const mySession = currentSession;
+    // Read + remove the F21 snapshot so a stale entry can't leak across
+    // sessions if a future handleStop bug forgot to consume it.
+    const polishOnForThisSession =
+      polishEnabledAtStart.get(mySession) ?? false;
+    polishEnabledAtStart.delete(mySession);
+
     await transitionTo("transcribing", "");
     try {
       await invoke<void>("stop_recording");
@@ -209,9 +484,35 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
         // so the Rust `Option<Vec<String>>` deserializes to `None`.
         vocabulary: undefined,
       });
+
+      // M6 polish branch — outputs `pasteText` for the unified paste step
+      // below. Reads the per-session F21 snapshot for tri-state gating; the
+      // second-level retry decision reads the live settings (Decision #5).
+      let pasteText = result.rawText;
+      if (polishOnForThisSession) {
+        if (mySession !== currentSession) {
+          // Older session whose hotkey-up arrived after a newer hotkey-down.
+          // Skip the visible enhancing transition (newer session owns the
+          // visible state) but DO finish the polish + paste in the
+          // background so the user's words get into the focused window.
+          pasteText = await runPolishWithRetry(result.rawText);
+        } else {
+          await transitionTo("enhancing", "");
+          pasteText = await runPolishWithRetry(result.rawText);
+          if (mySession !== currentSession) {
+            // A newer session took over while polish was awaiting. Pasting
+            // is still appropriate (we have the text + the session-1 target
+            // window was captured), but we must NOT emit terminal transitions
+            // — those belong to the newer session. The polishWarning ref
+            // stays as the polish branch left it; the newer session's
+            // transitionTo('idle' | 'recording') clears it.
+          }
+        }
+      }
+
       // Paste runs through the module-level chain so concurrent transcribe
       // completions don't trample the OS clipboard.
-      await pasteTextSerial(result.rawText);
+      await pasteTextSerial(pasteText);
       // Only emit terminal transitions if WE are still the latest session —
       // otherwise the user has started a new recording and we'd clobber it.
       if (mySession === currentSession) {
@@ -232,12 +533,112 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
     }
   }
 
+  /**
+   * Frontend retry orchestrator for `polish_text` (Decision #5 / F34).
+   * Returns the text to paste — polished on success, raw on fallback.
+   * Side effect: sets `polishWarning.value = true` on every fallback path
+   * (chunk-3 HUD reads it for the amber success bubble); leaves it alone
+   * on success.
+   *
+   * **Retry policy** mirrors Rust's reference predicate
+   * `plugins::llm_polish::providers::is_retryable` — retry only on transient
+   * variants (Timeout / RateLimited / NetworkOther / ConnectionRefused /
+   * DnsFailure / TlsFailure / Busy). Non-retryable variants (ApiKeyMissing
+   * / Disabled / EmptyInput / SafetyBlocked / InvalidPromptLength /
+   * EmptyResponse / Truncated / ImplausibleOutput / Cancelled / generic
+   * ApiError) take the single-attempt fallback path because retrying would
+   * just hit the same upstream condition.
+   *
+   * **Retry disable**: when `Settings.llmPolishRetryEnabled === false`, we
+   * skip retry even for transient variants and go straight to fallback.
+   * `undefined` and `true` mean retry-enabled (default).
+   *
+   * **No backoff between attempts** (Decision #5): the polish path is
+   * latency-critical for the user (HUD enhancing visual is on-screen), so
+   * a sleep between attempts would degrade UX more than it would help with
+   * rate-limit overshoot. The Retry-After header is parsed on the Rust
+   * side (chunk-1 P1 cleanup #2) for forward-compat, but Decision #5 still
+   * specifies no frontend backoff today.
+   */
+  async function runPolishWithRetry(rawText: string): Promise<string> {
+    // Read live settings for retry-enabled. Failure → assume retry ON
+    // (matches the tri-state default behavior — None / Some(true) = ON).
+    let retryEnabled = true;
+    try {
+      const settings = await invoke<Settings>("get_settings");
+      // Decision #5 tri-state: undefined and true = ON, false = OFF.
+      if (settings?.llmPolishRetryEnabled === false) {
+        retryEnabled = false;
+      }
+    } catch (err) {
+      console.warn(
+        "[voice-flow] get_settings failed during polish retry resolution, assuming retry ON",
+        err,
+      );
+    }
+
+    // Attempt 1.
+    try {
+      const polished = await invoke<PolishResult>("polish_text", {
+        args: { rawText, vocabulary: undefined, attempt: 1 },
+      });
+      return polished.polishedText;
+    } catch (firstErr) {
+      if (retryEnabled && isRetryablePolishError(firstErr)) {
+        // Attempt 2 (Decision #5 / F34 retry-same).
+        try {
+          const polished = await invoke<PolishResult>("polish_text", {
+            args: { rawText, vocabulary: undefined, attempt: 2 },
+          });
+          return polished.polishedText;
+        } catch (secondErr) {
+          console.warn(
+            "[voice-flow] polish failed on both attempts, falling back to raw",
+            secondErr,
+          );
+          polishWarning.value = true;
+          return rawText;
+        }
+      }
+      // Either retry disabled OR error not retryable — single-attempt
+      // fallback. Console.warn so we keep diagnostic breadcrumbs without
+      // routing through the visible error state (polish-failed paste-raw
+      // is a degraded-but-OK outcome, not a hard error).
+      console.warn(
+        "[voice-flow] polish failed, falling back to raw",
+        firstErr,
+      );
+      polishWarning.value = true;
+      return rawText;
+    }
+  }
+
   /** ESC during recording → cancel without paste. Clears the recording
    * buffer to free RAM (M2 retro #3). The cleanup invokes are best-effort;
    * the cancel path always returns to idle even if `clear_recording_buffer`
    * errors (e.g. recorder already stopped) so the user can immediately
-   * record again. */
+   * record again.
+   *
+   * **F23 (M6 chunk 2)**: ESC during `enhancing` is a deliberate **no-op**
+   * with a `console.warn` breadcrumb. Cancelling an in-flight LLM HTTP
+   * request requires either a Tauri `cancel_polish` command or
+   * `tokio::select!` with a cancel channel — both are non-trivial and
+   * deferred to v0.2. Polishing is short (3 s Groq / 15 s others timeout),
+   * so the user-visible inconvenience is bounded by those timeouts, and
+   * any frontend retry continues normally. ESC during `transcribing` /
+   * `success` / `error` is also intentionally a no-op — the only ESC-
+   * meaningful state in M6 is `recording`.
+   */
   async function handleCancel(): Promise<void> {
+    if (status.value === "enhancing") {
+      // F23: explicit no-op + diagnostic. Reviewer can grep this pattern
+      // when v0.2 lands the cancel channel — the warn becomes the swap
+      // site for the new `invoke<void>("cancel_polish")` call.
+      console.warn(
+        "[voice-flow] ESC during enhancing is a no-op (M6 limitation; cancel channel deferred to v0.2)",
+      );
+      return;
+    }
     if (status.value !== "recording") return;
     try {
       await invoke<void>("stop_recording");
@@ -297,11 +698,23 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
    *
    * The emit is best-effort: `try/catch` around it so a transient cross-
    * window IPC failure doesn't break the local state machine.
+   *
+   * **F25 polishWarning lifecycle (M6 chunk 2)**: clear `polishWarning` on
+   * any transition into `idle` or `recording`. These boundaries demarcate
+   * "starting fresh" vs "ending the current cycle" — without the clear, a
+   * polish-failed-warning success bubble (chunk 3 amber render) would
+   * leak into the next session's success bubble even when that next
+   * session's polish ran successfully (or polish was off). Done BEFORE
+   * the emit so any listener reading state on the same tick sees the
+   * cleared warning.
    */
   async function transitionTo(
     next: VoiceFlowStatus,
     msg: string,
   ): Promise<void> {
+    if (next === "idle" || next === "recording") {
+      polishWarning.value = false;
+    }
     status.value = next;
     message.value = msg;
     try {
@@ -460,6 +873,19 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
   }
 
   /**
+   * Dev-only polish-warning toggle (M6 chunk 2). Allows `pnpm dev` (vite-only
+   * mode) and chunk-3 Playwright screenshot helpers to flip the
+   * `polishWarning` ref directly so the HUD's amber success bubble can be
+   * captured without driving a real polish failure through the pipeline.
+   * Production safety mirrors `__devSetStatus` — gated by `import.meta.env.DEV`
+   * so a production-runtime caller is a no-op.
+   */
+  function __devSetPolishWarning(value: boolean): void {
+    if (!import.meta.env.DEV) return;
+    polishWarning.value = value;
+  }
+
+  /**
    * Dev-only state mutator (M5 chunk 2). Allows `pnpm dev` (vite-only mode,
    * no Tauri runtime) to drive the HUD through its 4 visual states for
    * Playwright screenshot captures, without going through the hotkey →
@@ -487,6 +913,9 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
     status: readonly(status),
     message: readonly(message),
     recordingStartedAtMs: readonly(recordingStartedAtMs),
+    // F25 polishWarning: read-only ref. Chunk-3 HUD reads it to switch
+    // the success bubble between green CheckCircle2 and amber AlertTriangle.
+    polishWarning: readonly(polishWarning),
     // Init returns the cleanup fn (now Promise-wrapped — await it!) — the
     // HUD entry calls this at bootstrap and stashes cleanup on `window`.
     init,
@@ -499,5 +928,6 @@ export const useVoiceFlowStore = defineStore("voiceFlow", () => {
     handleCancel,
     // Dev-only: see fn doc above.
     __devSetStatus,
+    __devSetPolishWarning,
   };
 });

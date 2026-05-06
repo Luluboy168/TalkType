@@ -275,7 +275,12 @@ pub async fn has_credential(
 ///   * `Ok(Some(key))` — provider has a stored key.
 ///   * `Ok(None)`      — provider exists in the allowlist but no key set.
 ///   * `Err(...)`      — invalid provider id or keyring backend error.
-#[allow(dead_code)]
+///
+/// Active call sites (M6 chunk 1):
+///   * `plugins::llm_polish::polish_text` — reads the LLM provider key
+///     before issuing the chat-completions POST. (chunk 1 removed the
+///     stale `#[allow(dead_code)]` annotation that previously hid this fn
+///     when only `keyring`-test paths called it.)
 pub(crate) fn get_credential(provider: &str) -> Result<Option<String>, CredentialsError> {
     validate_provider(provider)?;
     let entry =

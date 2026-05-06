@@ -7,11 +7,16 @@
     "aria": {
       "recording": "錄音中",
       "transcribing": "轉錄中",
+      "enhancing": "優化中",
       "success": "完成",
       "error": "錯誤：{message}"
     },
     "transcribing": "轉錄中…",
-    "success": "完成"
+    "enhancing": "優化中…",
+    "success": "完成",
+    "warning": {
+      "polishFailed": "優化失敗、已貼上原始轉錄"
+    }
   },
   "sidebar": {
     "dashboard": "儀表板",

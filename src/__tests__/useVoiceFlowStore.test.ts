@@ -231,8 +231,9 @@ describe("useVoiceFlowStore", () => {
     expect(mockInvoke).toHaveBeenCalledWith("paste_text", { text: "你好世界" });
     expect(store.recordingStartedAtMs).toBeNull();
 
-    // Advance the auto-revert timer (1000 ms) → idle.
-    vi.advanceTimersByTime(1000);
+    // Advance the auto-revert timer → idle. M6 chunk 2 bumped
+    // SUCCESS_LINGER_MS from 1000 → 1500 ms (Decision #8).
+    vi.advanceTimersByTime(1500);
     expect(store.status).toBe("idle");
   });
 
@@ -447,5 +448,382 @@ describe("useVoiceFlowStore", () => {
     // Retro challenger P1: hint must be PREPENDED so it survives the HUD
     // bubble's text-overflow: ellipsis truncation (chunk 2 max-width 280px).
     expect(store.message.startsWith("請手動 Ctrl+V")).toBe(true);
+  });
+
+  // ─── M6 chunk 2: polish branch (F21 + F22 + F25 + Decision #5) ──────────
+
+  /**
+   * Helper: drive handleStart through to recording with the F21 polish
+   * snapshot resolved per the supplied tri-state inputs. Mirrors
+   * `mockHandleStartInvokes` but adds the get_settings + has_credential
+   * mocks that the M6 chunk 2 polish-enabled-at-start snapshot consumes.
+   *
+   * `polishEnabled` argument:
+   *   * `true`      — Settings.llmPolishEnabled = true (explicit ON)
+   *   * `false`     — Settings.llmPolishEnabled = false (explicit OFF)
+   *   * `undefined` — Settings.llmPolishEnabled = undefined (auto-detect);
+   *                    `hasCredential` controls the resolved value
+   *
+   * `retryEnabled`: Settings.llmPolishRetryEnabled value used by
+   * runPolishWithRetry's get_settings (chunk 2 reads it live during
+   * handleStop, not snapshot at handleStart).
+   */
+  function mockHandleStartWithPolishSnapshot(opts: {
+    polishEnabled?: boolean | undefined;
+    hasCredential?: boolean;
+    provider?: string;
+  }): void {
+    mockInvoke.mockResolvedValueOnce(undefined); // position_hud_for_active_monitor
+    mockInvoke.mockResolvedValueOnce(undefined); // capture_target_window
+    mockInvoke.mockResolvedValueOnce(undefined); // start_recording
+    // get_settings for polish snapshot
+    mockInvoke.mockResolvedValueOnce({
+      schemaVersion: 1,
+      hotkey: { triggerKey: "right-alt", triggerMode: "hold" },
+      llmPolishEnabled: opts.polishEnabled,
+      llmProvider: opts.provider ?? "groq",
+    });
+    // has_credential is only invoked on the auto-detect path (undefined).
+    if (opts.polishEnabled === undefined) {
+      mockInvoke.mockResolvedValueOnce(opts.hasCredential ?? false);
+    }
+  }
+
+  /** Helper: mock the get_settings + polish_text path that runPolishWithRetry
+   * calls. `settings` is the live settings the retry branch reads;
+   * `polishOutcomes` is the queue of polish_text resolutions/rejections to
+   * consume in order (1 entry = no retry; 2 entries = retry). */
+  function mockPolishPipeline(opts: {
+    retryEnabled?: boolean;
+    polishOutcomes: Array<
+      { kind: "ok"; polishedText: string } | { kind: "err"; error: unknown }
+    >;
+  }): void {
+    mockInvoke.mockResolvedValueOnce({
+      schemaVersion: 1,
+      hotkey: { triggerKey: "right-alt", triggerMode: "hold" },
+      llmPolishRetryEnabled: opts.retryEnabled,
+    }); // get_settings inside runPolishWithRetry
+    for (const outcome of opts.polishOutcomes) {
+      if (outcome.kind === "ok") {
+        mockInvoke.mockResolvedValueOnce({
+          polishedText: outcome.polishedText,
+          durationMs: 100,
+          inputTokens: null,
+          outputTokens: null,
+        });
+      } else {
+        mockInvoke.mockRejectedValueOnce(outcome.error);
+      }
+    }
+  }
+
+  it("M6 chunk 2: polish ON explicit Some(true) + invoke succeeds → enhancing transition fires + polished text pasted", async () => {
+    const store = useVoiceFlowStore();
+    mockHandleStartWithPolishSnapshot({ polishEnabled: true });
+    await store.handleStart();
+    expect(store.status).toBe("recording");
+
+    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
+    mockInvoke.mockResolvedValueOnce({
+      rawText: "raw transcription",
+      transcriptionDurationMs: 100,
+      noSpeechProbability: null,
+    }); // transcribe_audio
+    mockPolishPipeline({
+      polishOutcomes: [{ kind: "ok", polishedText: "polished output" }],
+    });
+    mockInvoke.mockResolvedValueOnce(undefined); // paste_text
+
+    // Capture the enhancing emit — assertion easier than trying to peek
+    // the brief enhancing state synchronously (transitionTo is async).
+    await store.handleStop();
+    expect(store.status).toBe("success");
+    expect(store.polishWarning).toBe(false);
+
+    const enhancingEmit = emitToMock.mock.calls.find(
+      ([, , payload]) => (payload as { status?: string } | undefined)?.status === "enhancing",
+    );
+    expect(enhancingEmit).toBeDefined();
+
+    // paste_text was invoked with POLISHED text, not raw.
+    expect(mockInvoke).toHaveBeenCalledWith("paste_text", {
+      text: "polished output",
+    });
+    const rawPaste = mockInvoke.mock.calls.find(
+      ([cmd, args]) =>
+        cmd === "paste_text" &&
+        (args as { text?: string } | undefined)?.text === "raw transcription",
+    );
+    expect(rawPaste).toBeUndefined();
+  });
+
+  it("M6 chunk 2: polish ON explicit Some(true) but ApiKeyMissing → fallback to raw + polishWarning=true", async () => {
+    const store = useVoiceFlowStore();
+    // Decision #7 Some(true) attempts polish even without a key — Rust
+    // surfaces ApiKeyMissing → fallback. Helper passes hasCredential=false
+    // for completeness even though the snapshot path doesn't query it.
+    mockHandleStartWithPolishSnapshot({
+      polishEnabled: true,
+      hasCredential: false,
+    });
+    await store.handleStart();
+    expect(store.status).toBe("recording");
+
+    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
+    mockInvoke.mockResolvedValueOnce({
+      rawText: "raw transcription",
+      transcriptionDurationMs: 100,
+      noSpeechProbability: null,
+    }); // transcribe_audio
+    mockPolishPipeline({
+      polishOutcomes: [
+        {
+          kind: "err",
+          error: "API key missing for provider groq — set it in Settings",
+        },
+      ],
+    });
+    mockInvoke.mockResolvedValueOnce(undefined); // paste_text
+
+    await store.handleStop();
+    expect(store.status).toBe("success");
+    // F25: warning set on fallback so HUD chunk 3 renders amber bubble.
+    expect(store.polishWarning).toBe(true);
+    // Pasted RAW (fallback), not polished.
+    expect(mockInvoke).toHaveBeenCalledWith("paste_text", {
+      text: "raw transcription",
+    });
+    // Enhancing transition still fired (we entered the polish path).
+    const enhancingEmit = emitToMock.mock.calls.find(
+      ([, , payload]) => (payload as { status?: string } | undefined)?.status === "enhancing",
+    );
+    expect(enhancingEmit).toBeDefined();
+    // ApiKeyMissing is non-retryable → exactly one polish_text invoke.
+    const polishCalls = mockInvoke.mock.calls.filter(
+      ([cmd]) => cmd === "polish_text",
+    );
+    expect(polishCalls).toHaveLength(1);
+  });
+
+  it("M6 chunk 2: polish None auto-detect + has_credential=false → silent skip (no enhancing, no warning)", async () => {
+    const store = useVoiceFlowStore();
+    mockHandleStartWithPolishSnapshot({
+      polishEnabled: undefined,
+      hasCredential: false,
+    });
+    await store.handleStart();
+    expect(store.status).toBe("recording");
+
+    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
+    mockInvoke.mockResolvedValueOnce({
+      rawText: "raw transcription",
+      transcriptionDurationMs: 100,
+      noSpeechProbability: null,
+    }); // transcribe_audio
+    mockInvoke.mockResolvedValueOnce(undefined); // paste_text (no polish path)
+
+    await store.handleStop();
+    expect(store.status).toBe("success");
+    // No enhancing transition, no warning.
+    expect(store.polishWarning).toBe(false);
+    const enhancingEmit = emitToMock.mock.calls.find(
+      ([, , payload]) => (payload as { status?: string } | undefined)?.status === "enhancing",
+    );
+    expect(enhancingEmit).toBeUndefined();
+    // polish_text never invoked.
+    const polishCalls = mockInvoke.mock.calls.filter(
+      ([cmd]) => cmd === "polish_text",
+    );
+    expect(polishCalls).toHaveLength(0);
+    // Pasted raw.
+    expect(mockInvoke).toHaveBeenCalledWith("paste_text", {
+      text: "raw transcription",
+    });
+  });
+
+  it("M6 chunk 2: polish OFF explicit Some(false) → skips polish entirely even with key stored", async () => {
+    const store = useVoiceFlowStore();
+    // hasCredential=true is irrelevant when user explicitly turned it off.
+    // The has_credential helper isn't actually invoked on the explicit OFF
+    // path (we short-circuit before auto-detect), so the option is just
+    // noise here — included to document intent.
+    mockHandleStartWithPolishSnapshot({
+      polishEnabled: false,
+      hasCredential: true,
+    });
+    await store.handleStart();
+    expect(store.status).toBe("recording");
+
+    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
+    mockInvoke.mockResolvedValueOnce({
+      rawText: "raw transcription",
+      transcriptionDurationMs: 100,
+      noSpeechProbability: null,
+    }); // transcribe_audio
+    mockInvoke.mockResolvedValueOnce(undefined); // paste_text
+
+    await store.handleStop();
+    expect(store.status).toBe("success");
+    expect(store.polishWarning).toBe(false);
+    // polish_text never invoked.
+    const polishCalls = mockInvoke.mock.calls.filter(
+      ([cmd]) => cmd === "polish_text",
+    );
+    expect(polishCalls).toHaveLength(0);
+    // Pasted raw.
+    expect(mockInvoke).toHaveBeenCalledWith("paste_text", {
+      text: "raw transcription",
+    });
+    // No has_credential invoke either — the explicit OFF path skips it.
+    const hasCredCalls = mockInvoke.mock.calls.filter(
+      ([cmd]) => cmd === "has_credential",
+    );
+    expect(hasCredCalls).toHaveLength(0);
+  });
+
+  it("M6 chunk 2: polish failure with retry ON + first transient error → retries with attempt:2 and second succeeds", async () => {
+    const store = useVoiceFlowStore();
+    mockHandleStartWithPolishSnapshot({ polishEnabled: true });
+    await store.handleStart();
+
+    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
+    mockInvoke.mockResolvedValueOnce({
+      rawText: "raw transcription",
+      transcriptionDurationMs: 100,
+      noSpeechProbability: null,
+    }); // transcribe_audio
+    mockPolishPipeline({
+      retryEnabled: true,
+      polishOutcomes: [
+        // Connection refused matches the retryable PolishError::ConnectionRefused
+        // Display string ("Connection refused by server").
+        { kind: "err", error: "Connection refused by server" },
+        { kind: "ok", polishedText: "polished after retry" },
+      ],
+    });
+    mockInvoke.mockResolvedValueOnce(undefined); // paste_text
+
+    await store.handleStop();
+    expect(store.status).toBe("success");
+    // Success on retry → no warning.
+    expect(store.polishWarning).toBe(false);
+    // Pasted polished text from second attempt.
+    expect(mockInvoke).toHaveBeenCalledWith("paste_text", {
+      text: "polished after retry",
+    });
+    // Two polish_text invokes — attempt 1 then attempt 2.
+    const polishCalls = mockInvoke.mock.calls.filter(
+      ([cmd]) => cmd === "polish_text",
+    );
+    expect(polishCalls).toHaveLength(2);
+    // Verify attempt numbers.
+    const firstAttempt = polishCalls[0]?.[1] as
+      | { args?: { attempt?: number } }
+      | undefined;
+    const secondAttempt = polishCalls[1]?.[1] as
+      | { args?: { attempt?: number } }
+      | undefined;
+    expect(firstAttempt?.args?.attempt).toBe(1);
+    expect(secondAttempt?.args?.attempt).toBe(2);
+  });
+
+  it("M6 chunk 2: polish failure with retry ON + non-retryable error → no retry, fallback to raw + warning", async () => {
+    const store = useVoiceFlowStore();
+    mockHandleStartWithPolishSnapshot({ polishEnabled: true });
+    await store.handleStart();
+
+    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
+    mockInvoke.mockResolvedValueOnce({
+      rawText: "raw transcription",
+      transcriptionDurationMs: 100,
+      noSpeechProbability: null,
+    }); // transcribe_audio
+    mockPolishPipeline({
+      retryEnabled: true,
+      polishOutcomes: [
+        // SafetyBlocked is non-retryable — Display string
+        // "Provider blocked the response: SAFETY".
+        { kind: "err", error: "Provider blocked the response: SAFETY" },
+      ],
+    });
+    mockInvoke.mockResolvedValueOnce(undefined); // paste_text
+
+    await store.handleStop();
+    expect(store.status).toBe("success");
+    expect(store.polishWarning).toBe(true);
+    // Exactly one polish_text invoke (no retry).
+    const polishCalls = mockInvoke.mock.calls.filter(
+      ([cmd]) => cmd === "polish_text",
+    );
+    expect(polishCalls).toHaveLength(1);
+    // Pasted raw.
+    expect(mockInvoke).toHaveBeenCalledWith("paste_text", {
+      text: "raw transcription",
+    });
+  });
+
+  it("M6 chunk 2: polish failure with retry OFF → single attempt + fallback even on transient error", async () => {
+    const store = useVoiceFlowStore();
+    mockHandleStartWithPolishSnapshot({ polishEnabled: true });
+    await store.handleStart();
+
+    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
+    mockInvoke.mockResolvedValueOnce({
+      rawText: "raw transcription",
+      transcriptionDurationMs: 100,
+      noSpeechProbability: null,
+    }); // transcribe_audio
+    mockPolishPipeline({
+      retryEnabled: false,
+      polishOutcomes: [
+        // Timeout is normally retryable, but retry is disabled.
+        { kind: "err", error: "Request timed out after 3s" },
+      ],
+    });
+    mockInvoke.mockResolvedValueOnce(undefined); // paste_text
+
+    await store.handleStop();
+    expect(store.status).toBe("success");
+    expect(store.polishWarning).toBe(true);
+    // Exactly one polish_text invoke even though Timeout is retryable —
+    // user disabled retry.
+    const polishCalls = mockInvoke.mock.calls.filter(
+      ([cmd]) => cmd === "polish_text",
+    );
+    expect(polishCalls).toHaveLength(1);
+    expect(mockInvoke).toHaveBeenCalledWith("paste_text", {
+      text: "raw transcription",
+    });
+  });
+
+  it("M6 chunk 2: polishWarning clears on next recording transition (F25 lifecycle)", async () => {
+    const store = useVoiceFlowStore();
+
+    // Drive a polish-failed cycle to set polishWarning = true.
+    mockHandleStartWithPolishSnapshot({ polishEnabled: true });
+    await store.handleStart();
+    mockInvoke.mockResolvedValueOnce(undefined); // stop_recording
+    mockInvoke.mockResolvedValueOnce({
+      rawText: "first",
+      transcriptionDurationMs: 100,
+      noSpeechProbability: null,
+    }); // transcribe_audio
+    mockPolishPipeline({
+      polishOutcomes: [
+        { kind: "err", error: "API key missing for provider groq" },
+      ],
+    });
+    mockInvoke.mockResolvedValueOnce(undefined); // paste_text
+    await store.handleStop();
+    expect(store.status).toBe("success");
+    expect(store.polishWarning).toBe(true);
+
+    // Press hotkey to start a new recording. transitionTo('recording')
+    // must clear polishWarning per F25.
+    mockHandleStartWithPolishSnapshot({ polishEnabled: false });
+    await store.handleStart();
+    expect(store.status).toBe("recording");
+    expect(store.polishWarning).toBe(false);
   });
 });

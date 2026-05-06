@@ -7,11 +7,16 @@
     "aria": {
       "recording": "Recording",
       "transcribing": "Transcribing",
+      "enhancing": "Enhancing",
       "success": "Done",
       "error": "Error: {message}"
     },
     "transcribing": "Transcribing…",
-    "success": "Done"
+    "enhancing": "Enhancing…",
+    "success": "Done",
+    "warning": {
+      "polishFailed": "Polish failed; pasted raw transcription"
+    }
   },
   "sidebar": {
     "dashboard": "Dashboard",

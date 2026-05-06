@@ -366,6 +366,21 @@ pub async fn polish_text(
     // ─── Step 6: classify status ─────────────────────────────────────────
     let status = response.status();
     if !status.is_success() {
+        // Pre-fetch the `Retry-After` header BEFORE `.text().await` consumes
+        // the response. Mirrors the M3 pattern in
+        // `transcription/health.rs::test_groq_connection_with_url` which proves
+        // headers can be read first when the body needs to come second.
+        // Chunk-1 P1 cleanup: forward-compat for v0.2 backoff. Decision #5
+        // still says NO frontend backoff between retry attempts today, so
+        // the parsed value is currently informational only — but having it
+        // available means a future v0.2 change can flip on backoff without
+        // re-touching the read order here.
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+
         let body = match response.text().await {
             Ok(b) => b,
             Err(e) => {
@@ -376,12 +391,8 @@ pub async fn polish_text(
         };
         let extracted = providers::extract_provider_error_message(provider, &body);
         let err = if status.as_u16() == 429 {
-            // Re-parse Retry-After from the body since `response` is moved
-            // by `.text().await`. For chunk 1 we don't bother — `None` is
-            // acceptable; chunk 2's frontend retry policy doesn't depend
-            // on the value (Decision #5: no backoff between attempts).
             PolishError::RateLimited {
-                retry_after_secs: None,
+                retry_after_secs: retry_after,
             }
         } else {
             PolishError::ApiError {

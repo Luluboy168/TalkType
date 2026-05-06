@@ -620,6 +620,25 @@ mod tests {
     }
 
     #[test]
+    fn apply_patch_merges_llm_polish_retry_enabled_explicit_off() {
+        // Decision #5 retry toggle: Some(false) flips retry off explicitly.
+        // The chunk-2 useVoiceFlowStore reads this live during handleStop's
+        // runPolishWithRetry to decide whether to issue a second invoke
+        // after a transient first-attempt failure.
+        let mut settings = Settings::default();
+        assert_eq!(settings.llm_polish_retry_enabled, None);
+        let patch = SettingsPatch {
+            llm_polish_retry_enabled: Some(false),
+            ..SettingsPatch::default()
+        };
+        apply_patch(&mut settings, &patch);
+        assert_eq!(settings.llm_polish_retry_enabled, Some(false));
+        // Other LLM fields stay `None` — patch was sparse.
+        assert_eq!(settings.llm_polish_enabled, None);
+        assert_eq!(settings.llm_provider, None);
+    }
+
+    #[test]
     fn apply_patch_sparse_llm_provider_leaves_other_fields_untouched() {
         // The chunk-4 Settings UI patches one field at a time. A patch with
         // only `llm_provider` set must NOT clobber pre-existing values for
