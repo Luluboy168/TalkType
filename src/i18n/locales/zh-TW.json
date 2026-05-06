@@ -24,7 +24,8 @@
     "dictionary": "字典",
     "settings": "設定",
     "guide": "使用指南",
-    "recordingBadge": "錄音中"
+    "recordingBadge": "錄音中",
+    "enhancingBadge": "優化中"
   },
   "dashboard": {
     "ipcSmoke": {

@@ -826,4 +826,73 @@ describe("useVoiceFlowStore", () => {
     expect(store.status).toBe("recording");
     expect(store.polishWarning).toBe(false);
   });
+
+  // ─── M6 chunk 2 (P2-3 fold-in): ESC during enhancing is a no-op (F23) ────
+
+  it("M6 chunk 3 P2-3 fold-in: ESC during enhancing is a no-op + console.warn (F23)", async () => {
+    // F23 spec: ESC during `enhancing` does NOT cancel the in-flight LLM
+    // HTTP request. Cancelling reqwest mid-flight requires a `cancel_polish`
+    // Tauri command or a tokio::select! cancel channel — both deferred to
+    // v0.2. Polish's bounded timeouts (3 s Groq / 15 s others) cap the user
+    // inconvenience. The handler emits a console.warn breadcrumb so a future
+    // dev grepping for the M6 limitation can find the swap site.
+    //
+    // Test: drive the store to `enhancing` via the DEV-only `__devSetStatus`
+    // helper, capture the ESC listener via `init()`, invoke it, and assert:
+    //   * status remains 'enhancing' (not flipped to idle by handleCancel)
+    //   * console.warn was called with the expected breadcrumb
+    //   * stop_recording / clear_recording_buffer were NOT invoked (those
+    //     are the recording-cancel cleanup, not relevant here)
+    const store = useVoiceFlowStore();
+
+    // Wire listeners so the captured ESC callback is available in
+    // listenCallbacks. init issues 4 listen() calls (hotkey pressed/
+    // released/toggled + escape/audio-aborted) — we only need ESC.
+    const cleanup = await store.init();
+
+    // Drive into enhancing via the DEV mutator (exposed on the store
+    // surface; tree-shaken in production).
+    store.__devSetStatus("enhancing", "", null);
+    expect(store.status).toBe("enhancing");
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {
+      /* swallow log noise — we only care that it fires */
+    });
+
+    const escCb = listenCallbacks.get("escape:pressed");
+    expect(escCb).toBeDefined();
+    // ESC listener fires handleCancel; with status='enhancing' it should
+    // hit the F23 no-op branch.
+    escCb!({ payload: undefined });
+    // handleCancel awaits internally; flush the microtask queue so the
+    // sync console.warn fires before our assertion.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Status unchanged — F23 no-op branch took over.
+    expect(store.status).toBe("enhancing");
+
+    // The breadcrumb mentioning the M6 limitation should have fired.
+    expect(warnSpy).toHaveBeenCalled();
+    const warnedAboutEnhancing = warnSpy.mock.calls.some((call) =>
+      call.some(
+        (arg) => typeof arg === "string" && arg.includes("ESC during enhancing"),
+      ),
+    );
+    expect(warnedAboutEnhancing).toBe(true);
+
+    // Recording-cancel cleanup invokes must NOT have fired — those are
+    // for the `recording` ESC path, not enhancing.
+    const stopRecordingCalls = mockInvoke.mock.calls.filter(
+      ([cmd]) => cmd === "stop_recording",
+    );
+    const clearBufferCalls = mockInvoke.mock.calls.filter(
+      ([cmd]) => cmd === "clear_recording_buffer",
+    );
+    expect(stopRecordingCalls).toHaveLength(0);
+    expect(clearBufferCalls).toHaveLength(0);
+
+    warnSpy.mockRestore();
+    cleanup();
+  });
 });
