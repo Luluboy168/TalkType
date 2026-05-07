@@ -93,18 +93,18 @@ pub const LLM_MODEL_LIST: &[LlmModelConfig] = &[
     },
     // ─── Gemini ──────────────────────────────────────────────────────────
     LlmModelConfig {
-        id: "gemini-2.0-flash",
+        id: "gemini-2.5-flash",
         provider: LlmProviderId::Gemini,
-        display_name: "Gemini 2.0 Flash",
+        display_name: "Gemini 2.5 Flash",
         context_window: 1_000_000,
         default_max_tokens: 2048,
         max_tokens_field: MaxTokensField::MaxOutputTokens,
         is_free: true,
     },
     LlmModelConfig {
-        id: "gemini-1.5-flash",
+        id: "gemini-3-flash-preview",
         provider: LlmProviderId::Gemini,
-        display_name: "Gemini 1.5 Flash",
+        display_name: "Gemini 3 Flash (preview)",
         context_window: 1_000_000,
         default_max_tokens: 2048,
         max_tokens_field: MaxTokensField::MaxOutputTokens,
@@ -176,7 +176,7 @@ pub fn get_models_by_provider(provider: LlmProviderId) -> Vec<&'static LlmModelC
 pub fn get_default_model_id(provider: LlmProviderId) -> &'static str {
     match provider {
         LlmProviderId::Groq => "llama-3.3-70b-versatile",
-        LlmProviderId::Gemini => "gemini-2.0-flash",
+        LlmProviderId::Gemini => "gemini-2.5-flash",
         LlmProviderId::Openrouter => "meta-llama/llama-3.3-70b-instruct:free",
         LlmProviderId::Nvidia => "meta/llama-3.3-70b-instruct",
     }
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn find_llm_model_config_round_trips_known_id() {
-        let config = find_llm_model_config("gemini-2.0-flash").expect("gemini-2.0-flash is pinned");
+        let config = find_llm_model_config("gemini-2.5-flash").expect("gemini-2.5-flash is pinned");
         assert_eq!(config.provider, LlmProviderId::Gemini);
         assert_eq!(config.max_tokens_field, MaxTokensField::MaxOutputTokens);
     }
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn gemini_uses_max_output_tokens_field() {
-        let config = find_llm_model_config("gemini-2.0-flash").expect("gemini-2.0-flash");
+        let config = find_llm_model_config("gemini-2.5-flash").expect("gemini-2.5-flash");
         assert_eq!(config.max_tokens_field, MaxTokensField::MaxOutputTokens);
     }
 
@@ -376,7 +376,7 @@ mod tests {
     fn effective_model_id_per_provider_default_returns_consistent_id() {
         for (provider_str, expected_default) in [
             ("groq", "llama-3.3-70b-versatile"),
-            ("gemini", "gemini-2.0-flash"),
+            ("gemini", "gemini-2.5-flash"),
             ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
             ("nvidia", "meta/llama-3.3-70b-instruct"),
         ] {

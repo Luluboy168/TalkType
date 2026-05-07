@@ -59,7 +59,7 @@ describe("LLM_MODEL_LIST", () => {
 
   it("getDefaultModelId picks the first matching entry per provider", () => {
     expect(getDefaultModelId("groq")).toBe("llama-3.3-70b-versatile");
-    expect(getDefaultModelId("gemini")).toBe("gemini-2.0-flash");
+    expect(getDefaultModelId("gemini")).toBe("gemini-2.5-flash");
     expect(getDefaultModelId("openrouter")).toBe(
       "meta-llama/llama-3.3-70b-instruct:free",
     );

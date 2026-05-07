@@ -691,7 +691,7 @@ mod tests {
         find_llm_model_config("llama-3.3-70b-versatile").expect("groq default")
     }
     fn gemini_model() -> &'static LlmModelConfig {
-        find_llm_model_config("gemini-2.0-flash").expect("gemini default")
+        find_llm_model_config("gemini-2.5-flash").expect("gemini default")
     }
     fn openrouter_model() -> &'static LlmModelConfig {
         find_llm_model_config("meta-llama/llama-3.3-70b-instruct:free").expect("openrouter default")

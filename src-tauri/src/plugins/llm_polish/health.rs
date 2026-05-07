@@ -337,7 +337,7 @@ mod tests {
             .and(header("x-goog-api-key", "test_key"))
             .and(query_param_is_missing("key"))
             .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"models":[{"name":"models/gemini-2.0-flash"},{"name":"models/gemini-1.5-flash"}]}"#,
+                r#"{"models":[{"name":"models/gemini-2.5-flash"},{"name":"models/gemini-3-flash-preview"}]}"#,
             ))
             .mount(&server)
             .await;

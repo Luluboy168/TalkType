@@ -116,16 +116,16 @@ export const LLM_MODEL_LIST: readonly LlmModelInfo[] = [
   },
   // ─── Gemini ──────────────────────────────────────────────────────────
   {
-    id: "gemini-2.0-flash",
+    id: "gemini-2.5-flash",
     provider: "gemini",
-    displayName: "Gemini 2.0 Flash",
+    displayName: "Gemini 2.5 Flash",
     contextWindow: 1_000_000,
     isFree: true,
   },
   {
-    id: "gemini-1.5-flash",
+    id: "gemini-3-flash-preview",
     provider: "gemini",
-    displayName: "Gemini 1.5 Flash",
+    displayName: "Gemini 3 Flash (preview)",
     contextWindow: 1_000_000,
     isFree: true,
   },
