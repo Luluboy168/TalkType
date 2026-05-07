@@ -717,15 +717,34 @@ describe("useVoiceFlowStore", () => {
       ([cmd]) => cmd === "polish_text",
     );
     expect(polishCalls).toHaveLength(2);
-    // Verify attempt numbers.
+    // Verify attempt numbers AND that the outer `args` envelope is present.
+    // Optional chaining (?.args?.attempt) would mask a wrapper-shape mismatch
+    // — the M6 retro caught a P0 in SettingsLlmPolishSection where flat args
+    // were passed because the test happily evaluated `undefined?.attempt`.
+    // Strict assertions below: outer `args` envelope must exist, no flat
+    // top-level fields allowed.
     const firstAttempt = polishCalls[0]?.[1] as
-      | { args?: { attempt?: number } }
+      | { args?: { attempt?: number; rawText?: string }; rawText?: unknown; attempt?: unknown }
       | undefined;
     const secondAttempt = polishCalls[1]?.[1] as
-      | { args?: { attempt?: number } }
+      | { args?: { attempt?: number; rawText?: string }; rawText?: unknown; attempt?: unknown }
       | undefined;
-    expect(firstAttempt?.args?.attempt).toBe(1);
-    expect(secondAttempt?.args?.attempt).toBe(2);
+    expect(firstAttempt).toBeDefined();
+    expect(firstAttempt!.args).toBeDefined();
+    expect(firstAttempt!.args!.attempt).toBe(1);
+    expect(firstAttempt!.args!.rawText).toBeDefined();
+    expect(secondAttempt).toBeDefined();
+    expect(secondAttempt!.args).toBeDefined();
+    expect(secondAttempt!.args!.attempt).toBe(2);
+    expect(secondAttempt!.args!.rawText).toBeDefined();
+    // Defense against future drift: NO flat fields at top level. If any
+    // future change accidentally sends `{ rawText, attempt }` instead of
+    // `{ args: { rawText, attempt } }`, these assertions fail loudly
+    // (Tauri's deserializer would reject the IPC call at runtime).
+    expect(firstAttempt).not.toHaveProperty("rawText");
+    expect(firstAttempt).not.toHaveProperty("attempt");
+    expect(secondAttempt).not.toHaveProperty("rawText");
+    expect(secondAttempt).not.toHaveProperty("attempt");
   });
 
   it("M6 chunk 2: polish failure with retry ON + non-retryable error → no retry, fallback to raw + warning", async () => {

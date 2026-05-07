@@ -301,9 +301,11 @@ async function handleTestPolish(): Promise<void> {
   const sample = t("views.settings.llmPolish.testSample");
   try {
     const result = await invoke<PolishResult>("polish_text", {
-      rawText: sample,
-      vocabulary: [],
-      attempt: 1,
+      args: {
+        rawText: sample,
+        vocabulary: [],
+        attempt: 1,
+      },
     });
     testResult.value = { before: sample, after: result.polishedText };
   } catch (err) {

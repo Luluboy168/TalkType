@@ -283,6 +283,72 @@ describe("SettingsLlmPolishSection", () => {
     expect(retryToggle.attributes("disabled")).toBeUndefined();
   });
 
+  it("test polish button invokes polish_text with wrapped { args: { ... } } envelope (M6 P0 ship-blocker fix)", async () => {
+    // M6 retro found a P0: handleTestPolish was passing flat args
+    // `{ rawText, vocabulary, attempt }` instead of the wrapped envelope
+    // `{ args: { rawText, vocabulary, attempt } }`. The Rust command
+    // signature `polish_text(args: PolishTextArgs)` requires the wrapper
+    // per Tauri 2 parameter binding; flat args produce a deserialize
+    // error like "missing field `args`" at runtime — which would have
+    // failed acceptance condition #10 across all 4 free providers.
+    //
+    // This test exercises the click path of `handleTestPolish` and
+    // asserts the IPC arg-shape is wrapped. A flat-args regression
+    // would fail this test loudly (positive + negative assertions).
+    setupInvokeMock({
+      settings: {
+        schemaVersion: 1,
+        hotkey: { triggerKey: "right-alt", triggerMode: "hold" },
+        llmPolishEnabled: true,
+        llmProvider: "groq",
+      },
+      hasCredential: true,
+      polishText: { polishedText: "polished output" },
+    });
+    const wrapper = mountSection();
+    await flushPromises();
+
+    const testButton = wrapper.find('[data-testid="test-polish-button"]');
+    expect(testButton.exists()).toBe(true);
+    // Sanity: must NOT be disabled in this setup.
+    expect(testButton.attributes("disabled")).toBeUndefined();
+
+    await testButton.trigger("click");
+    await flushPromises();
+
+    // Find the polish_text invoke call (must have happened exactly once).
+    const polishCalls = mockInvoke.mock.calls.filter(
+      ([cmd]) => cmd === "polish_text",
+    );
+    expect(polishCalls).toHaveLength(1);
+
+    // Assert outer { args: { ... } } envelope shape.
+    const polishCall = polishCalls[0]!;
+    const callArgs = polishCall[1] as
+      | {
+          args?: {
+            rawText?: string;
+            vocabulary?: unknown[];
+            attempt?: number;
+          };
+          rawText?: unknown;
+          vocabulary?: unknown;
+          attempt?: unknown;
+        }
+      | undefined;
+    expect(callArgs).toBeDefined();
+    expect(callArgs!.args).toBeDefined();
+    expect(callArgs!.args!.rawText).toEqual(expect.any(String));
+    expect(callArgs!.args!.vocabulary).toEqual(expect.any(Array));
+    expect(callArgs!.args!.attempt).toBe(1);
+    // Critical defense against future drift: NO flat fields at top level.
+    // If any future refactor accidentally re-introduces flat args, these
+    // assertions fail loudly.
+    expect(callArgs).not.toHaveProperty("rawText");
+    expect(callArgs).not.toHaveProperty("vocabulary");
+    expect(callArgs).not.toHaveProperty("attempt");
+  });
+
   it("M5→M6 upgrade banner shows on first render, hides after dismiss + flag set (F35)", async () => {
     setupInvokeMock({
       settings: {
