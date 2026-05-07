@@ -286,6 +286,83 @@
 6. `doc/plans/03-rust-modules.md` `## M7 transcription_local module 規劃` section
 7. `doc/plans/06-hybrid-transcription.md` cloud / local switching dispatcher pattern
 
-## User acceptance verdict（待 user 跑、append 後 mark M6 真正 Done）
+## User acceptance verdict — ✅ 通過（2026-05-06）
 
-User 跑 `docs/m6-acceptance.md` 18 條後、append 結果到本檔尾部「## User acceptance addendum」section（同 M5 模式、M5 acceptance addendum 抓出 3 P0 後修了 3 commit）。
+User 跑 `docs/m6-acceptance.md` 18 條 manual SOP 後 dogfood 找到 2 個非 P0 問題、修完後全條 ✅ 通過。
+
+## User acceptance addendum
+
+User 在 acceptance 期間發現 2 個 dogfood issue、各自一個 commit 修完：
+
+### Dogfood fix 1：Gemini 模型 deprecated（commit `d031bc6`）
+
+**問題**：M6 chunk 1 + 4 寫死的 default Gemini models `gemini-2.0-flash` + `gemini-1.5-flash` 都已被 Google deprecated。Test connection（GET `/v1beta/models`）仍 return 200 因 API key valid + endpoint 還活著、但 polish path（POST `:generateContent`）會回 404 NOT_FOUND。Acceptance #10 / #11 對 Gemini provider 撞牆。
+
+**修法**：替換為當前 stable + preview 兩個免費 model：
+- `gemini-2.0-flash` → `gemini-2.5-flash`（current stable flash、新 default）
+- `gemini-1.5-flash` → `gemini-3-flash-preview`（latest preview）
+
+**改動**：
+- `src-tauri/src/plugins/llm_polish/registry.rs`：2 model IDs + display names + `get_default_model_id(Gemini)` 改返回 `"gemini-2.5-flash"`
+- `src-tauri/src/plugins/llm_polish/providers.rs`：`gemini_model()` test fixture lookup
+- `src-tauri/src/plugins/llm_polish/health.rs`：wiremock body string-only 更新
+- `src/lib/providers.ts`：TS LLM_MODEL_LIST mirror 同步
+- `src/__tests__/providers.test.ts`：literal string assertions 更新
+
+**Lesson**：M9 release prep 加「每個 provider default model 在 dogfood 期 hit 一次 real `:generateContent`」SOP，不能只靠 test connection 的 `/models` 路徑判斷。
+
+### Dogfood fix 2：Custom prompt save/cancel + dirty-state UX（commit `d27628d`）
+
+**問題**：Chunk 4 implement 的 blur-persist UX 不直觀、user 想要 explicit save/cancel buttons + 視覺 dirty-state 區分。Chunk 4 reviewer 也 P2 過 flag 過 blur-persist 的 fragility（user tab 切走不 blur 就丟失改動）。
+
+**改動**：`src/components/SettingsLlmPolishSection.vue` ~88 LOC delta：
+- 新 refs：`customPromptDraft`（working copy bound to textarea）+ `customPromptSaved`（last persisted snapshot）
+- 新 computeds：`customPromptDirty`、`customPromptSaveDisabled`（!dirty || > 1000 chars）、`customPromptCancelDisabled`（!dirty）
+- 新 handlers：`handleCustomPromptSave`（persist + reset saved snapshot）、`handleCustomPromptCancel`（revert draft to saved）
+- `syncFromStore` watch：capture `wasDirty` BEFORE mutating `customPromptSaved` 防 clobber 在改的 user draft
+- Template：textarea class binding `customPromptDirty ? 'text-foreground' : 'text-muted-foreground'`、移除 `@blur` handler、加 `<Button>` save (default variant) + cancel (outline) with `data-testid` hooks
+- 移除舊 `customPrompt` ref + blur-persist logic
+- i18n：`customPrompt.save` + `customPrompt.cancel` × 2 locales = 4 keys
+
+**Tests**：`src/__tests__/SettingsLlmPolishSection.test.ts` 加 6 新 vitest 在「M6 dogfood: custom prompt save/cancel + dirty-state coloring」describe block。Vitest 100 → **106 pass**。
+
+**Subtle bug caught during verification**：第一次 test run 3 個 fail 含一個既有的 1001-char destructive regression。Root cause：`syncFromStore` 在 mutate `customPromptSaved` 後才讀 `customPromptDirty`、dirty check 永遠 false-negative、initial load textarea 不 seed 到 persisted prompt。Fix：先 capture `wasDirty` 再 mutate。沒這個 fix 的話 F32 char-count test 才 incidentally catch 到 — 直接 dirty-state class binding test 不會發現。
+
+**Lesson**：Vue computed 在 watch callback 內讀取時要小心 timing — 想觀測「mutate 前的狀態」就要在 mutate 前先 capture。
+
+### Acceptance 18 條最終結果
+
+✅ 18/18 通過（2 dogfood fix 後重測過 #10 + #9）。
+
+### M6 final test counts
+
+- **cargo**：281 pass（chunk 0-1 +118 vs M5 baseline 163；後續 chunks + dogfood fixes 都 cargo-test 數量不變）
+- **vitest**：**106 pass**（M5 baseline 53 + chunks 0-4 +47 + dogfood fix 2 +6 = 106）
+- **vue-tsc / clippy / eslint**：全綠
+
+### M6 final commit chain（main 之上 11 commits）
+
+```
+d27628d feat(m6): custom prompt save/cancel + dirty-state           ← dogfood 2
+d031bc6 fix(m6): Gemini 2.0/1.5 → 2.5/3-preview deprecated fix      ← dogfood 1
+7e2cd06 fix(m6): P0 — Test polish IPC arg shape + retro IDEAS append ← retro P0
+fc7a3d1 docs(m6): chunk 5 milestone closure
+09a2923 feat(m6): chunk 4 Settings UI + 4 free providers active
+1930b0c feat(m6): chunk 3 HUD enhancing + dual-mode + sidebar badge
+589fac0 feat(m6): chunk 2 voice flow polish branch + tri-state + retry
+6ab4f2e feat(m6): chunk 1 LLM polish Rust module + 4 free providers
+b20f133 feat(m6): chunk 0 IPC types + CSP + Settings scaffold
+b68026d docs(m6): roadmap stale-warning pointer to kickoff log
+13fb76d docs(m6): plan refinement — 8 decisions resolved, challenger folded
+```
+
+### Next: push branch + open PR
+
+User acceptance 通過後在 worktree branch `claude/silly-spence-3adbd2` 跑：
+
+```bash
+git push -u origin claude/silly-spence-3adbd2
+gh pr create --title "M6: LLM polish multi-provider (4 free providers + 5 preset modes)" --body "..."
+```
+
+CI 跑過後 merge 進 main、M6 真正 ship。M6 是 PR #10 候選。
