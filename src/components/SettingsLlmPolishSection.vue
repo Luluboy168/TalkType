@@ -83,7 +83,22 @@ const polishEnabled = ref<boolean | undefined>(undefined);
 const provider = ref<LlmActivePolishProviderId>("groq");
 const modelId = ref<string>("llama-3.3-70b-versatile");
 const promptMode = ref<LlmPromptMode>("default");
-const customPrompt = ref<string>("");
+/**
+ * Custom prompt working copy (the textarea binds here). Decoupled from
+ * `customPromptSaved` so we can show explicit Save / Cancel buttons + a
+ * dirty-state visual (grey when clean, black when edited). Replaces the
+ * previous chunk-4 "blur-persist" behaviour after dogfood feedback that
+ * users tabbing away with their mouse never blurred the textarea — and
+ * the chunk-4 reviewer's P2 about a missing debounced fallback.
+ */
+const customPromptDraft = ref<string>("");
+/**
+ * Last persisted snapshot of `llmCustomPrompt`. The textarea text is
+ * "clean" iff `customPromptDraft === customPromptSaved`. Driven by the
+ * `settings.llmCustomPrompt` watch so a sibling-window edit propagates
+ * here without clobbering an in-progress draft.
+ */
+const customPromptSaved = ref<string>("");
 const retryEnabled = ref<boolean | undefined>(undefined);
 /** Whether the chosen provider has a key in keyring. Drives the no-key
  * banner + the auto-detect tri-state visual. Refreshed on provider change
@@ -128,11 +143,31 @@ const showNoKeyBanner = computed<boolean>(
 /** Custom prompt char count (code-points, not bytes — CJK 1 char = 3
  * bytes is fine since the Rust cap also counts chars). */
 const customPromptCharCount = computed<number>(() =>
-  Array.from(customPrompt.value).length,
+  Array.from(customPromptDraft.value).length,
 );
 
 const customPromptTooLong = computed<boolean>(
   () => customPromptCharCount.value > CUSTOM_PROMPT_MAX,
+);
+
+/** Dirty when the working draft differs from the persisted snapshot.
+ * Drives both the textarea text colour (muted-foreground when clean,
+ * foreground when dirty) and the save / cancel buttons' disabled state. */
+const customPromptDirty = computed<boolean>(
+  () => customPromptDraft.value !== customPromptSaved.value,
+);
+
+/** Save button disabled when not dirty OR over the 1000-char cap. The
+ * cap check uses raw `.length` rather than `customPromptCharCount` so
+ * the boundary case (exactly 1000 chars) stays enabled — matches the
+ * Rust `validate_custom_prompt` behaviour. */
+const customPromptSaveDisabled = computed<boolean>(
+  () =>
+    !customPromptDirty.value || customPromptDraft.value.length > CUSTOM_PROMPT_MAX,
+);
+/** Cancel button disabled when not dirty (no work to revert). */
+const customPromptCancelDisabled = computed<boolean>(
+  () => !customPromptDirty.value,
 );
 
 const customPromptCountLabel = computed<string>(() =>
@@ -193,7 +228,18 @@ function syncFromStore(): void {
     modelId.value = getDefaultModelId(provider.value);
   }
   promptMode.value = s.llmPromptMode ?? "default";
-  customPrompt.value = s.llmCustomPrompt ?? "";
+  // Sync the persisted snapshot. We capture "was the textarea dirty
+  // BEFORE this sync?" first — if the user has an in-progress edit (draft
+  // !== old saved), don't clobber their draft when an external Settings
+  // write fans in. Order matters: read `customPromptDirty` before mutating
+  // `customPromptSaved`, otherwise the dirty check would always see a
+  // freshly-synced saved value and false-negative.
+  const persistedCustomPrompt = s.llmCustomPrompt ?? "";
+  const wasDirty = customPromptDirty.value;
+  customPromptSaved.value = persistedCustomPrompt;
+  if (!wasDirty) {
+    customPromptDraft.value = persistedCustomPrompt;
+  }
   retryEnabled.value = s.llmPolishRetryEnabled;
 }
 
@@ -283,14 +329,25 @@ function handlePresetChange(value: unknown): void {
 }
 
 function handleCustomPromptInput(value: string): void {
-  customPrompt.value = value;
-  // Don't auto-save on every keystroke — only on blur, otherwise we'd
-  // hammer the Rust persistence path. Save happens in handleCustomBlur.
+  // Mutate only the draft. Persistence happens on explicit Save click —
+  // dogfood replaced the chunk-4 blur-persist with explicit save / cancel
+  // buttons + a dirty-state visual.
+  customPromptDraft.value = value;
 }
 
-function handleCustomBlur(): void {
-  if (customPromptTooLong.value) return;
-  void patchSettings({ llmCustomPrompt: customPrompt.value });
+async function handleCustomPromptSave(): Promise<void> {
+  if (customPromptSaveDisabled.value) return;
+  await patchSettings({ llmCustomPrompt: customPromptDraft.value });
+  // Optimistic local clean-state. The Rust `settings:updated` event will
+  // also fire and walk through `syncFromStore`, but flipping the saved
+  // snapshot here gives the user immediate feedback (textarea returns to
+  // muted grey on click rather than waiting for the round-trip).
+  customPromptSaved.value = customPromptDraft.value;
+}
+
+function handleCustomPromptCancel(): void {
+  if (customPromptCancelDisabled.value) return;
+  customPromptDraft.value = customPromptSaved.value;
 }
 
 async function handleTestPolish(): Promise<void> {
@@ -584,12 +641,14 @@ onMounted(async () => {
       </Label>
       <Textarea
         id="llm-custom-prompt"
-        :model-value="customPrompt"
+        :model-value="customPromptDraft"
         :placeholder="t('views.settings.llmPolish.customPrompt.placeholder')"
         rows="4"
         data-testid="custom-prompt-textarea"
+        :class="
+          customPromptDirty ? 'text-foreground' : 'text-muted-foreground'
+        "
         @update:model-value="handleCustomPromptInput"
-        @blur="handleCustomBlur"
       />
       <div class="flex items-center justify-between text-xs">
         <span
@@ -607,6 +666,26 @@ onMounted(async () => {
         >
           {{ customPromptCountLabel }}
         </span>
+      </div>
+      <!-- Save / Cancel buttons (dogfood: explicit persist + revert) -->
+      <div class="flex justify-end gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          :disabled="customPromptCancelDisabled"
+          data-testid="custom-prompt-cancel"
+          @click="handleCustomPromptCancel"
+        >
+          {{ t("views.settings.llmPolish.customPrompt.cancel") }}
+        </Button>
+        <Button
+          size="sm"
+          :disabled="customPromptSaveDisabled"
+          data-testid="custom-prompt-save"
+          @click="handleCustomPromptSave"
+        >
+          {{ t("views.settings.llmPolish.customPrompt.save") }}
+        </Button>
       </div>
     </div>
 

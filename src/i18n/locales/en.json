@@ -177,7 +177,9 @@
         "customPrompt": {
           "placeholder": "Enter a custom system prompt (max 1000 chars)",
           "charCount": "{n} / 1000",
-          "tooLong": "Custom prompt exceeds 1000 chars; please shorten"
+          "tooLong": "Custom prompt exceeds 1000 chars; please shorten",
+          "save": "Save",
+          "cancel": "Cancel"
         },
         "dataFlow": {
           "audio": "Audio",

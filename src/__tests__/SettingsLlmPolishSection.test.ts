@@ -418,4 +418,188 @@ describe("SettingsLlmPolishSection", () => {
     await flushPromises();
     expect(wrapper.find('[data-testid="no-key-banner"]').exists()).toBe(false);
   });
+
+  // ─── M6 dogfood: custom prompt save / cancel + dirty-state colour ────────
+  //
+  // Replaced chunk-4's blur-persist with explicit Save / Cancel buttons +
+  // a dirty-state visual (grey when clean, black when edited). These tests
+  // pin the contract so chunk-4 reviewer's P2 (no debounced fallback for
+  // mouse-tab-out users) doesn't regress.
+  describe("M6 dogfood: custom prompt save/cancel + dirty-state coloring", () => {
+    it("textarea shows muted-foreground class when not dirty (saved state)", async () => {
+      setupInvokeMock({
+        settings: {
+          schemaVersion: 1,
+          hotkey: { triggerKey: "right-alt", triggerMode: "hold" },
+          llmPolishEnabled: true,
+          llmProvider: "groq",
+          llmPromptMode: "custom",
+          llmCustomPrompt: "abc",
+        },
+        hasCredential: true,
+      });
+      const wrapper = mountSection();
+      await flushPromises();
+      const textarea = wrapper.find('[data-testid="custom-prompt-textarea"]');
+      expect(textarea.exists()).toBe(true);
+      // Clean state: muted-foreground present, foreground (non-muted) absent
+      expect(textarea.classes()).toContain("text-muted-foreground");
+      expect(textarea.classes()).not.toContain("text-foreground");
+    });
+
+    it("textarea shows text-foreground class when dirty (user edited)", async () => {
+      setupInvokeMock({
+        settings: {
+          schemaVersion: 1,
+          hotkey: { triggerKey: "right-alt", triggerMode: "hold" },
+          llmPolishEnabled: true,
+          llmProvider: "groq",
+          llmPromptMode: "custom",
+          llmCustomPrompt: "abc",
+        },
+        hasCredential: true,
+      });
+      const wrapper = mountSection();
+      await flushPromises();
+      const textarea = wrapper.find<HTMLTextAreaElement>(
+        '[data-testid="custom-prompt-textarea"]',
+      );
+      // Type a different value — flips draft != saved → dirty
+      await textarea.setValue("abcd");
+      await flushPromises();
+      expect(textarea.classes()).toContain("text-foreground");
+      expect(textarea.classes()).not.toContain("text-muted-foreground");
+    });
+
+    it("Save button persists draft and returns to clean state", async () => {
+      setupInvokeMock({
+        settings: {
+          schemaVersion: 1,
+          hotkey: { triggerKey: "right-alt", triggerMode: "hold" },
+          llmPolishEnabled: true,
+          llmProvider: "groq",
+          llmPromptMode: "custom",
+          llmCustomPrompt: "abc",
+        },
+        hasCredential: true,
+      });
+      const wrapper = mountSection();
+      await flushPromises();
+      const textarea = wrapper.find<HTMLTextAreaElement>(
+        '[data-testid="custom-prompt-textarea"]',
+      );
+      await textarea.setValue("xyz");
+      await flushPromises();
+      const saveButton = wrapper.find('[data-testid="custom-prompt-save"]');
+      expect(saveButton.exists()).toBe(true);
+      // Sanity: button enabled when dirty + within cap
+      expect(saveButton.attributes("disabled")).toBeUndefined();
+      await saveButton.trigger("click");
+      await flushPromises();
+      // update_settings called with the draft as patch
+      const updateCalls = mockInvoke.mock.calls.filter(
+        ([cmd]) => cmd === "update_settings",
+      );
+      expect(updateCalls.length).toBeGreaterThanOrEqual(1);
+      const lastCall = updateCalls[updateCalls.length - 1]!;
+      const callArgs = lastCall[1] as
+        | { patch?: { llmCustomPrompt?: string } }
+        | undefined;
+      expect(callArgs?.patch?.llmCustomPrompt).toBe("xyz");
+      // Returns to clean state — textarea back to muted-foreground
+      expect(textarea.classes()).toContain("text-muted-foreground");
+      expect(textarea.classes()).not.toContain("text-foreground");
+    });
+
+    it("Cancel button reverts draft to saved without persisting", async () => {
+      setupInvokeMock({
+        settings: {
+          schemaVersion: 1,
+          hotkey: { triggerKey: "right-alt", triggerMode: "hold" },
+          llmPolishEnabled: true,
+          llmProvider: "groq",
+          llmPromptMode: "custom",
+          llmCustomPrompt: "abc",
+        },
+        hasCredential: true,
+      });
+      const wrapper = mountSection();
+      await flushPromises();
+      const textarea = wrapper.find<HTMLTextAreaElement>(
+        '[data-testid="custom-prompt-textarea"]',
+      );
+      await textarea.setValue("xyz");
+      await flushPromises();
+      // Snapshot how many update_settings calls existed BEFORE cancel
+      const updatesBeforeCancel = mockInvoke.mock.calls.filter(
+        ([cmd]) => cmd === "update_settings",
+      ).length;
+      const cancelButton = wrapper.find('[data-testid="custom-prompt-cancel"]');
+      expect(cancelButton.exists()).toBe(true);
+      expect(cancelButton.attributes("disabled")).toBeUndefined();
+      await cancelButton.trigger("click");
+      await flushPromises();
+      // No new update_settings call — cancel must NOT persist
+      const updatesAfterCancel = mockInvoke.mock.calls.filter(
+        ([cmd]) => cmd === "update_settings",
+      ).length;
+      expect(updatesAfterCancel).toBe(updatesBeforeCancel);
+      // Draft reverted → textarea reflects saved value
+      expect(
+        (textarea.element as HTMLTextAreaElement).value,
+      ).toBe("abc");
+      // Returns to clean state
+      expect(textarea.classes()).toContain("text-muted-foreground");
+    });
+
+    it("Save button disabled when over 1000 char cap (even if dirty)", async () => {
+      setupInvokeMock({
+        settings: {
+          schemaVersion: 1,
+          hotkey: { triggerKey: "right-alt", triggerMode: "hold" },
+          llmPolishEnabled: true,
+          llmProvider: "groq",
+          llmPromptMode: "custom",
+          llmCustomPrompt: "",
+        },
+        hasCredential: true,
+      });
+      const wrapper = mountSection();
+      await flushPromises();
+      const textarea = wrapper.find<HTMLTextAreaElement>(
+        '[data-testid="custom-prompt-textarea"]',
+      );
+      await textarea.setValue("a".repeat(1001));
+      await flushPromises();
+      const saveButton = wrapper.find('[data-testid="custom-prompt-save"]');
+      const cancelButton = wrapper.find('[data-testid="custom-prompt-cancel"]');
+      // Save disabled by char cap
+      expect(saveButton.attributes("disabled")).toBeDefined();
+      // Cancel still enabled — user must be able to revert the over-cap draft
+      expect(cancelButton.attributes("disabled")).toBeUndefined();
+    });
+
+    it("Both buttons disabled when not dirty (clean state)", async () => {
+      setupInvokeMock({
+        settings: {
+          schemaVersion: 1,
+          hotkey: { triggerKey: "right-alt", triggerMode: "hold" },
+          llmPolishEnabled: true,
+          llmProvider: "groq",
+          llmPromptMode: "custom",
+          llmCustomPrompt: "abc",
+        },
+        hasCredential: true,
+      });
+      const wrapper = mountSection();
+      await flushPromises();
+      const saveButton = wrapper.find('[data-testid="custom-prompt-save"]');
+      const cancelButton = wrapper.find('[data-testid="custom-prompt-cancel"]');
+      expect(saveButton.exists()).toBe(true);
+      expect(cancelButton.exists()).toBe(true);
+      // Clean state → both disabled (no work to save / no work to revert)
+      expect(saveButton.attributes("disabled")).toBeDefined();
+      expect(cancelButton.attributes("disabled")).toBeDefined();
+    });
+  });
 });

@@ -177,7 +177,9 @@
         "customPrompt": {
           "placeholder": "輸入自訂 system prompt(最多 1000 字)",
           "charCount": "{n} / 1000",
-          "tooLong": "自訂指令超過 1000 字、請縮短"
+          "tooLong": "自訂指令超過 1000 字、請縮短",
+          "save": "儲存",
+          "cancel": "取消"
         },
         "dataFlow": {
           "audio": "音訊",
