@@ -118,25 +118,38 @@ voiceFlow
   });
 
 // M5 chunk 2 dev hook — exposes a small mutator on window so vite-only
-// mode (`pnpm dev`, no Tauri runtime) can drive the HUD through its 4
-// visual states from Playwright / devtools for screenshot captures.
-// Tree-shaken from production builds via `import.meta.env.DEV`.
+// mode (`pnpm dev`, no Tauri runtime) can drive the HUD through its 5
+// visual states (M5 4 + M6 chunk 3 enhancing) from Playwright / devtools
+// for screenshot captures. Tree-shaken from production builds via
+// `import.meta.env.DEV`.
 //
 // Usage from devtools / browser_evaluate:
 //   window.__hudDev.setStatus('recording', { startedAtMs: Date.now() })
+//   window.__hudDev.setStatus('enhancing')                   // M6 chunk 3
 //   window.__hudDev.setStatus('error', { message: 'API key 無效' })
 //   window.__hudDev.setStatus('idle')
+//   window.__hudDev.setPolishWarning(true)                   // M6 chunk 3
 //
-// Implementation: delegates to `__devSetStatus` on the store, which writes
-// the inner writable refs directly (the public refs are `readonly()`-wrapped).
+// Implementation: delegates to `__devSetStatus` / `__devSetPolishWarning`
+// on the store, which write the inner writable refs directly (the public
+// refs are `readonly()`-wrapped). Both store-side helpers are also gated
+// by `import.meta.env.DEV` so a stray production caller is a no-op
+// (defense in depth alongside this whole `if` branch).
 if (import.meta.env.DEV) {
   (
     window as unknown as {
       __hudDev?: {
         setStatus: (
-          status: "idle" | "recording" | "transcribing" | "success" | "error",
+          status:
+            | "idle"
+            | "recording"
+            | "transcribing"
+            | "enhancing"
+            | "success"
+            | "error",
           opts?: { message?: string; startedAtMs?: number | null },
         ) => void;
+        setPolishWarning: (value: boolean) => void;
       };
     }
   ).__hudDev = {
@@ -147,6 +160,13 @@ if (import.meta.env.DEV) {
         opts.startedAtMs ??
           (status === "recording" ? Date.now() : null),
       );
+    },
+    setPolishWarning(value) {
+      // M6 chunk 3 helper — flip the store's polishWarning ref directly so
+      // Playwright can capture the success-warning amber bubble without
+      // running a real polish failure through the pipeline. Combine with
+      // setStatus('success') to render the amber AlertTriangle.
+      voiceFlow.__devSetPolishWarning(value);
     },
   };
 }

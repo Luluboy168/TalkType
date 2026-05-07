@@ -236,3 +236,250 @@ Spec §17 open question 留給 implementer。實作 `:key="store.status"` 對 st
 - **Vocabulary auto-learn**（v0.2）：Typeless 模式、出現 ≥3 次自動加。當前 manual list（M8）不夠 sticky。
 - **Per-step data-flow indicator UI**：「Audio → Groq Whisper → OpenAI Polish → Paste（無 retention）」清楚 render 在 Settings。M9 polish。避免 Typeless 那種 marketing 失調翻車。
 - **Vite-only mode `invoke` error UX**：`SettingsView.vue` 在 `pnpm dev`（沒 Tauri runtime）時把「Cannot read properties of undefined (reading 'invoke')」直接 render 為紅錯。M9 用 `if (window.__TAURI_INTERNALS__)` 探測 + friendly fallback。
+
+## M6 plan-time challenger findings (2026-05-06 — 不在 M6 scope、留下次)
+
+> 由 M6 開工前 plan-time challenger subagent（agentId `a5769f31fdf47c8c7`）找出 45 findings、main session 對照 plan + spec 後判定優先級。P0 + critical P1 已 fold 進 [`sessions/2026-05-06-m6-llm-polish-kickoff.md`](sessions/2026-05-06-m6-llm-polish-kickoff.md) refined chunks（F1-F33）；以下 P2 + 部分 P1 不阻擋 M6 ship、留 M9 / Phase 2。
+
+### Privacy / Security（M9 unless noted）
+
+- **Vocabulary 多 vendor PII（A3、Phase 2 privacy）**：M3 vocabulary 跟 Whisper prompt 一起送 Groq、M6 加上 OpenAI / Anthropic / Gemini polish prompt — 同 user vocabulary 變成送 4 個 vendor 的 server log。User 加自己名字「張小明」或公司術語進去、4 vendor 都 log。M9 privacy disclosure 必須列出 multi-vendor flow（不只「audio → Groq」）。考慮加 Settings `llm_polish_send_vocabulary: bool` opt-out（預設 true）給 privacy-conscious user。
+- **Custom prompt provenance（A4、M9 docs）**：user 從外部 LLM 頁面（Claude / ChatGPT）複製進 TalkType custom prompt textarea — 那串內容若被 LLM-attacker 注入，polish 流程的 system prompt 變成 attacker-controlled、output 可能 inject 進 paste target。Phase 1 不解決、M9 加 textarea 旁警告「不建議直接複製來自 web LLM 的提示詞」+ 加進 `doc/plans/05-data-model.md` Custom prompt section threat model 文件。
+- **In-flight polish HTTP shutdown 漏 token billing（D21、M9 polish）**：`lib.rs::RunEvent::Exit` 8-step shutdown 沒等 in-flight polish_text future。reqwest 強制 cancel 但 server-side 已 commit prompt tokens、user 月底看 LLM bill 多 N 次幽靈 charges。M9 加「step before audio mute restore：等 polish_busy 1s timeout」用 `tokio::time::timeout` + `polish_busy.load()` poll。
+
+### UX gaps（dogfood + M9）
+
+- **ESC during enhancing 不 cancel polish（F23 decision、M6 explicit no-op）**：M6 不投資 cancel channel、ESC during enhancing 只 console.warn「優化中無法取消」。User 撞到 15s timeout 不能中止。Phase 2 加 `cancel_polish` Tauri command + `tokio::select!` cancel channel。
+- **Toggle hotkey burst during enhancing（F24 decision、polish_busy guard reject）**：second polish_text 期間返回 `Busy` → fallback to raw paste。Spec 留：可考慮 drop polish_busy 完全（mirror M4 transcribe_busy removal）每 polish 各自 future、無 shared state — 但 LLM 計費考量保留 guard 防 quota burn。Dogfood 期收 user feedback 看是否 friction。
+- **SR 連續 transcribing → enhancing 不 announce（F28 mitigation、Phase 2 a11y polish）**：F28 改 ARIA wording 故意不同 + zero-width space mitigate；但 Phase 2 a11y testing 必須驗實機 NVDA / Narrator 是否 both announce。
+- **HUD success state 1.5s linger 仍可能不夠**（M5 retro P1 carry、Decision #8 bump 1000→1500）：M6 加 enhancing → 整個 pipeline 變長、user 對 success 視覺確認需求增。Dogfood 觀察 1500ms 是否還短、可能 v0.2 改成 settings `hud.success_linger_ms`。
+- **Custom prompt token estimate（E26、M9 polish UX）**：UI 只顯示 char count，CJK 1 char ≈ 1.5 tokens 不直觀。M9 加 estimated tokens display（`chars * 1.5` heuristic for CJK；ASCII-only 用 `chars * 0.25`）。
+
+### Provider / API contract risks
+
+- **Anthropic / OpenAI / Gemini 模型 deprecation（C13 partial fold、F4 escape hatch + M9 monitor）**：F4 已加 `llm_model_id_override` schema field、user 可手動 paste 任何 model ID（不需 app update）。但 `LLM_MODEL_LIST` 自動 refresh 仍是 M9 candidate（fetch live `/v1/models` 與 hardcoded 比、過期警告）。
+- **Anthropic `anthropic-version: 2023-06-01` hardcode（C16、M9 release prep）**：M6 pin 2023-06-01。Anthropic 若 deprecate 此 version mid-Phase-1（如 2024 deprecate 2023-01-01）polish 全 break。M9 release prep 加 re-confirm version 步驟、加 `LLM_API_VERSIONS` const block + next-review-date comment。
+- **SSE streaming polish（C18、Phase 2 candidate）**：M6 spec 不做 streaming（HTTP 1 round trip）。OpenAI / Anthropic / Gemini 都 support SSE。Phase 2 candidate：HUD bubble 漸進式 reveal polish text。defer 因 (a) SendInput Ctrl+V 不能 paste partial；(b) user expectation 是 paste-after-complete。
+
+### Architectural debt（M9）
+
+- **3 enum HttpProviderError 抽 shared trait（Plan §4 #1 + G33、M9 polish 候選）**：`TestConnectionError` + `TranscriptionError` + `PolishError` 三 enum 各 ~80% Network*/RateLimited/ApiError/ParseError 重複。M6 不抽（3 enum 是抽象 threshold 邊緣、抽會 risk M6 review noise hide bug）。M9 polish dedicated commit 抽 `HttpProviderError` trait + 各 module 拼自己 data-layer variant。
+- **`enhancement_duration_ms` SQLite write（J43、M8 history persistence）**：M6 PolishResult 有 durationMs 但不 write SQLite（database.rs M8 才接）。M8 history persistence 從 PolishResult 讀 durationMs 寫進 transcriptions table。M6 dogfood 期僅 console.log。
+- **Token count → SQLite analytics（I39、M8 + M9）**：F17 PolishResult 已預留 input_tokens / output_tokens optional 欄位、M6 不 display UI。M8 history persistence 寫進 SQLite、M9 dogfood 用 token / latency 量 p50 p95。
+
+### Backward compat / observability
+
+- **Settings field-level deserializer 容錯（H36、M9 polish）**：當前 `Settings::load_or_default` 處理 top-level 壞 JSON 走 default。但 partial-malformed（如 `{"hotkey": ..., "llmCustomPrompt": 12345}` wrong type）整個 deserialize fail → 全 default、user 失去正確的 hotkey 設定。M9 polish 加 per-field permissive deserializer with logging。Add unit test `settings_with_invalid_llm_field_preserves_hotkey`.
+- **PolishError variant → i18n key 對齊（I37 部分 fold、M9 漏網 audit）**：F32 chunk 4 列 18 polishError keys、覆蓋 PolishError 全 variants。M9 release verify SOP 加一條：`grep -E "polishError\." src/locales/*.json | wc -l` 應 = `grep -E "PolishError::" src-tauri/ | wc -l × 2 langs`、確保新加 variant 一定有 i18n key。
+- **In-flight polish reqwest cancel-on-shutdown（D21 carry、Phase 2 audit）**：M6 不 fix（`lib.rs` Exit 8-step 沒 polish wait）；user 在 polish 期間 quit app → in-flight HTTP cancel 但 server-side 已扣 token quota。M9 release verify 量 dogfood 是否真撞到。Phase 2 接 cancel channel 後一併修。
+
+## M6 chunk reviewer findings (2026-05-06 — chunks 0-4)
+
+> 由 M6 chunks 0-4 完成後 reviewer subagents 找出。chunk-internal P1 已 fold 進後續 chunks（如 chunk 0 reviewer P2 LLM_PROVIDERS inactive 由 chunk 4 fix；chunk 1 reviewer P1-1 stale `#[allow(dead_code)]` 由 chunk 2 fix；chunk 2 reviewer P2-3 F23 ESC during enhancing 由 chunk 3 加 test cover）。以下 ~35 surviving items 是 M9 polish / Phase 2 candidates、不阻擋 M6 ship。
+
+### Chunk 0 reviewer (P2 only — 4 items)
+
+- **P2-1 `credentials.ts` doc comment under-describes type widening**：chunk 0 把 `LlmProviderId` widening 進 credentials provider list、doc comment 沒明說 widening rationale。M9 polish docstring 加 reasoning。
+- **P2-2 `LLM_PROVIDERS` 仍 inactive for openrouter/nvidia in chunk 0**（chunk 4 fixed）：chunk 0 加 type / Rust schema、chunk 4 才 flip `active: true`。M9 review 已 follow up done.
+- **P2-3 `SUCCESS_LINGER_MS = 1000` 仍未 bump in chunk 0**（chunk 2 fixed by Decision #8）：chunk 0 不動 voice flow store、chunk 2 加 1000→1500 bump。M9 confirmed done.
+- **P2-4 placeholder module style cosmetic**：`llm_polish/mod.rs` 22 LOC placeholder 風格不 align Rust idiom（chunk 1 重寫）。M9 cosmetic.
+
+### Chunk 1 reviewer (P1 + P2 — 10 items)
+
+- **P1-1 stale `#[allow(dead_code)]` on `get_credential`**（chunk 2 fixed）：chunk 1 加 `#[allow(dead_code)]` 因 lib.rs 還沒 register polish_text、chunk 2 register 後此 attr 應移除（已 done）。
+- **P1-2 Retry-After comment misleading**（chunk 2 fixed via pre-fetch）：chunk 1 註解寫「retry only if Retry-After ≤ 2s」但實作是 ≤ 2s ✓ 但 ≤ 1s 才實際走 retry path（與註解 mismatch）。chunk 2 改 frontend retry-same logic 後此 comment 已 不適用、chunk 2 cleanup。
+- **P2-3 No explicit OAI-compat 401/429/500 wiremock tests**（compensated by direct parser tests）：chunk 1 wiremock 主要 test happy path、4 xx/5xx 用 direct parser tests cover、wiremock 沒專門測 OAI-compat 4xx/5xx。M9 polish candidate（switch wiremock 系列若 M9 strictness 需要）。
+- **P2-4 `insta` not used for prompt-string snapshots**（acceptable per "或等價"）：chunk 1 spec 寫 insta snapshot OR 等價、implementer 用 inline string compare assert 等價。M9 switch insta if strictness needed.
+- **P2-5 `MaxOutputTokens` defensive fallback in OAI-compat path; consider `cfg(debug_assertions)` panic**：chunk 1 build_request OAI-compat 雖然只用 LegacyMaxTokens、但 fallback 到 MaxOutputTokens 防萬一。M9 polish 改 `cfg(debug_assertions)` panic 強化 invariant。
+- **P2-6 Gemini truncation accepts `>= raw_len`（spec says `≥ 0.9× raw`、lenient by ~0.1）**：chunk 1 implementer 對 Gemini truncation 的接受 threshold 比 spec lenient。M9 polish 評估 threshold 調整。
+- **P2-7 `unwrap_or_else(|| "groq".to_string())` defensive default in `polish_text` — could surface ParseError**：chunk 1 polish_text 對 settings provider 取 unwrap fallback `"groq"`、實際應 surface `ParseError`。M9 polish 改 `Result<>` propagate.
+- **P2-8 Token count `(Option<u32>, Option<u32>)` flatten loses "no usage at all" vs "missing fields" distinction**：chunk 1 token count parse 用 (Option, Option) tuple、unable to distinguish provider 沒回 usage object vs 回了但 fields 缺。M9 polish 改 `Option<TokenUsage>` 再各自 Option。
+- **P2-9 `_ => "groq"` fallback in `emit_fallback` could log warning for routing bug**：chunk 1 polish_text emit fallback 對 unknown provider fallback "groq"、應加 log warn 抓 routing bug。M9 polish add `tracing::warn!`.
+- **P2-10 LOC budget overrun (3742 lines vs ~1100 budget)**：mostly tests + docstrings、5 sub-modules 各別超 budget。reviewer flagged but 不 P0 因 critical correctness 路徑值得多 test。**lesson**：Rust critical 路徑 LOC budget hard constraint 不適用、reviewer should audit 內容品質而非 LOC.
+
+### Chunk 2 reviewer (P1 + P2 — 8 items)
+
+- **P1-1 `isRetryablePolishError` doc claims "mirrors Rust `is_retryable`" but they actually diverge**：TS `Busy` 視為 retryable、Rust `is_retryable` 不視 Busy 為 retryable。Doc/code drift。M9 polish 修 doc 或 align logic.
+- **P1-2 Stale `#[allow(dead_code)]` on Rust `is_retryable`**：Decision #5 routes retry to frontend、`is_retryable` Rust 函數變 dead code、chunk 2 應 remove `#[allow(dead_code)]` 或 delete 整 fn。M9 polish.
+- **P2-1 polishEnabledAtStart Map race-out leak**：rare bounded leak（snapshot key 的 Map 會在 session crash 不 cleanup 時殘留）。M9 robustness fix（finally block clear）.
+- **P2-2 polishWarning cross-session pollution**：rare race when older session's polish failure fires after newer recording starts。chunk 3 部分 mitigate（lifecycle clear in transitionTo idle/recording）、IDEAS append 為 M9 race fix（與 M5 retro `audio:recording-aborted` race fix 相關）.
+- **P2-3 F23 ESC during enhancing test**（chunk 3 added）：chunk 2 console.warn no-op 加了、chunk 3 加 test cover.
+- **P2-4 Polish failure NOT trigger 3s error linger not explicitly asserted**：chunk 2 vitest 雖然測 polish failure → polishWarning + raw paste、但沒 explicit 測「不走 3s error linger 路徑」（若 implementer 改寫成 走 error 而非 success-warning bubble、test 不會 catch）。M9 robustness add explicit assertion.
+- **P2-5 None + hasCred=true (trust-transitive) path no unit test**：chunk 2 vitest 主要 cover `Some(true)` / `Some(false)` paths、F22 None auto-detect 路徑沒 dedicated unit test。M5→M6 trust-transitive 是 critical UX flow、M9 polish add test.
+- **P2-6 F28 ARIA \W regex strips CJK**（chunk 3 fixed via \p{L}）：chunk 2 加的 ARIA wording differ assertion 用 `\W` regex、CJK context strip 中文後變 empty string、assertion 永遠 false。chunk 3 reviewer 抓出後改 `\p{L}` Unicode-aware letter class.
+
+### Chunk 3 reviewer (P2 — 3 items)
+
+- **P2-1 Playwright MCP screenshot leak vector to repo root**（chunk 4 added .gitignore patterns）：M5 chunk 4 已 cleanup `m5r-*.png`、M6 chunk 3 reviewer 仍踩雷。chunk 4 加 `.gitignore` 8 line patterns 阻擋 future leak.
+- **P2-2 `<Transition>` icon swap timing regression test guard missing**：chunk 3 加 success bubble dual-mode（CheckCircle2 ↔ AlertTriangle 透過 `<Transition>`）、但 test 沒 cover transition timing regression（如未來 implementer 把 transition prop 從 `mode="out-in"` 改 default、icon 會 overlap 短暫）。M9 polish add Playwright timing guard.
+- **P2-3 Dashboard sidebar hidden in transcribing/success states (M9 dogfood may revisit)**：chunk 3 only enhancing badge cascade、transcribing / success states sidebar badge hidden（M5 既定）。M9 dogfood 看 user 是否 want transcribing badge.
+
+### Chunk 4 reviewer (P1 + P2 — 10 items)
+
+- **P1-1 `SettingsLlmPolishSection.vue` 686 LOC vs 400 budget**（extract dataflow indicator + upgrade banner + no-key banner subcomponents）：超 budget 70%、chunk 4 reviewer flagged 應 extract subcomponents。implementer time 不夠、M9 polish refactor.
+- **P1-2 Upgrade banner flash-of-hidden-then-shown (synchronous localStorage read at script setup top)**：原 `onMounted` async read、reload 時 banner 短暫 flash hidden 再 show。chunk 4 implementer 已修 sync read at script setup top.
+- **P2-1 `apiKey.providerInactiveSuffix` `M6+` → `v0.2` change**（intentional, doc per Decision #3）：chunk 4 改 i18n suffix wording from "M6+" to "v0.2"、reflect Decision #3 cascade（OpenAI/Anthropic defer to v0.2、不是 M6 加）。Doc 已 cover.
+- **P2-2 Reviewer screenshots write to repo root despite filename param (consider PowerShell wrapper)**：chunk 4 reviewer Playwright 仍寫 repo root（cwd issue not yet fixed by `.gitignore`）。M9 process improvement 寫 PowerShell wrapper `playwright-screenshot.ps1` 強制 path prefix `.playwright-mcp/<reviewer>/`.
+- **P2-3 Test polish button enabled when polish ON + no key (acceptable diagnostic, could disable + tooltip)**：chunk 4 toggle ON + no key 時 test polish button 仍 enabled、user 點會看 ApiKeyMissing error。可 disable + tooltip「請先設 API key」更友善。M9 UX polish.
+- **P2-4 `syncFromStore` provider whitelist hardcoded; should derive from `LLM_PROVIDERS.filter(p => p.active)`**：chunk 4 syncFromStore 對 provider 切換 hardcoded check `provider in ['groq', 'openrouter', 'nvidia', 'gemini']`、未來 v0.2 加 OpenAI/Anthropic 時 whitelist 沒 update。改 derive from `LLM_PROVIDERS.filter(p => p.active)` 自動 sync. M9 refactor.
+- **P2-5 `watch + onMounted` slight redundancy**：chunk 4 SettingsLlmPolishSection 用 `watch` + `onMounted` 雙重 sync、redundancy。M9 polish consolidate.
+- **P2-6 No `<Suspense>` boundary (brief flash of defaults before sync)**：chunk 4 mount 瞬間 user 看 default values flash 0.1s、再 sync from store。M9 polish 加 `<Suspense>` 包 settings load.
+- **P2-7 Custom prompt blur-persist (no debounced fallback)**：chunk 4 custom prompt only blur 時 persist、user 中途切視窗會丟未 persist 內容。M9 polish 加 debounced auto-save。
+- **P2-8 Pre-existing Audio Input section error (not chunk 4 — investigate as separate issue)**：reviewer 跑 settings smoke test 時 Audio Input section console error、不是 chunk 4 加的（M5 / M3 carry forward）。投單獨 issue investigate.
+
+## M6 retro challenger findings (2026-05-06)
+
+> 由 M6 完成後 retro challenger 對 8 commits + session log + ~5500 LOC integration 反向審視產出。Chunk reviewers 抓 chunk-level、retro 抓 cross-cutting integration + 整體性問題。已標 priority（P0 = ship-blocker；P1 = M6.1 / v0.1.0 release prep；P2 = M9 polish；Phase 2 = v0.2+）。
+
+### Privacy / Security
+
+- **[P0 — FIXED in commit `<this commit>`] Test polish button broken — IPC arg-shape mismatch**
+  `src/components/SettingsLlmPolishSection.vue:303-307` invokes `polish_text` with flat `{ rawText, vocabulary, attempt }` — but the Rust command signature is `pub async fn polish_text(args: PolishTextArgs)` (mod.rs:194-198). Tauri 2 binds args by parameter name, so the only correct shape is `{ args: { rawText, vocabulary, attempt } }`. Vitest didn't catch this because the mock stub didn't validate the wrapper shape. Acceptance condition #10 ("Test polish button works for 4 free providers") would have failed across all 4 providers. **Fix landed in this same commit**: wrapped invoke args + tightened vitest guards in `SettingsLlmPolishSection.test.ts` + `useVoiceFlowStore.test.ts` to assert outer `args` envelope.
+
+- **[P1] OpenRouter privacy disclosure body doesn't enumerate underlying providers**
+  `src/i18n/locales/zh-TW.json:123` says polish requests go to "OpenRouter 與其底層模型供應商" — but OpenRouter routes Llama 3.3 → Meta or Together AI; Qwen → Alibaba Cloud, etc. User has no way to know which entity their text reaches. The "底層供應商政策不一" punt leaves the user without specific consent. Compare to `groq` body which names the entity directly. Enterprise compliance reviewer would flag this Typeless-style 隱私失調.
+  Mitigation: M9 polish — add "(routes to Meta / Alibaba)" sub-text per OpenRouter model.
+
+- **[P1] Vocabulary multi-vendor PII still absent from privacy disclosure (elevate from IDEAS A3 P2)**
+  M6 actually wired vocabulary through the polish prompt path (`prompts.rs::inject_vocabulary` consumes `args.vocabulary`). User's "張小明" or company-internal terms now leak to up to 4 vendors (5 counting OpenRouter's underlying provider). The chunk-4 ProviderPrivacyDialog body mentions polish requests but does NOT name "vocabulary".
+  Mitigation: for v0.1.0 launch, either (1) add "(包含詞彙表 vocabulary 內容)" caveat to all 4 LLM-polish privacy bodies, OR (2) gate vocabulary off the polish prompt by default until M9 surfaces an opt-in. Trust matters at this stage given OSS marketing posture.
+
+- **[P2] CSP `connect-src` allowlist not pruned to active providers**
+  `tauri.conf.json:47` allows all 4 free hosts hard-coded. Tighter posture: dynamic CSP based on `Settings.llm_provider`. Probably overkill since (a) reqwest runs Rust-side, (b) frontend has no fetch() calls. M9 audit candidate.
+
+### State machine integration with M5
+
+- **[P1] Newer session can clobber polishWarning before old polish settles**
+  `useVoiceFlowStore.handleStop` lines 502-509: when polish completes after `mySession !== currentSession`, comment says newer session's transitionTo clears polishWarning. But the newer session's `transitionTo('recording')` already cleared it at handleStart. After old polish fallback sets `polishWarning.value = true` (line 599 / 611), the next new-session terminal transition should clear it — but there's a race window where new session's success bubble may render amber when its own polish was fine. M5 retro flagged a similar race; M6 inherits with longer enhancing window (3-15s).
+  Mitigation: M9 race fix — make session-IDed polishWarning (`Map<sessionId, boolean>`) OR guard `runPolishWithRetry` to only set polishWarning when `mySession === currentSession`.
+
+- **[P1] 5-state HUD chain has 1.2s of pure transitions before success linger**
+  `HudOverlay.vue` uses `<Transition mode="out-in" name="fade">` at 200ms each direction. With recording → transcribing → enhancing → success → idle, that's 6 fade phases × 200ms = 1.2s of transition time. M5 retro flagged this for 4-state chain; M6 added a 5th state without retiming. Decision #8 bumped success linger 1000→1500 partly to compensate. For fast Groq polish (p50 ~1s), user perceives flicker.
+  Mitigation: M6.1 — replace `out-in` with cross-fade OR shorten to 150ms each. Phase 2: scrap fade transitions entirely.
+
+- **[P1] ESC during enhancing has no UI affordance — user has no signal ESC was ignored**
+  `useVoiceFlowStore.handleCancel` (line 632-640) only `console.warn`s. User can press ESC during enhancing for 15s expecting cancel; nothing visible happens. F23 documented this but UX-poor without visible feedback.
+  Mitigation: M6.1 — flash HUD label to "優化中無法取消、請等候" for ~500ms before reverting to "優化中…".
+
+- **[P2] handleStop's `await transitionTo("transcribing", "")` (line 478) runs UNCONDITIONALLY before mySession check**
+  If a newer handleStart has set status to `recording`, the older handleStop's transitionTo will clobber to `transcribing`. Inherited from M5 architecture; M6 didn't address.
+  Mitigation: M9 race fix — hoist the `mySession !== currentSession` check above the first `transitionTo`.
+
+### Cross-cutting i18n consistency
+
+- **[P1] 19 polishError.* i18n keys are dead — never referenced from any component / store / composable**
+  `grep -r "polishError\." src/` returns matches only in locale files. The HUD success-warning state shows generic `hud.warning.polishFailed` — user never sees the specific reason (auth vs rate-limit vs safety-block). This is dead i18n in the bundle (~38 string entries × 2 locales) AND a UX gap. F32 spec specified the keys but didn't enforce wire-up.
+  Mitigation (M6.1 P1): wire `PolishFailureReason` from `polish:failed-fallback` event payload into the HUD warning bubble's amber text (replace generic with reason-specific).
+
+- **[P1] M5→M6 upgrade banner shows to FRESH installs, mislabeling them as upgraders**
+  `SettingsLlmPolishSection.vue:336-348` reads `localStorage.getItem('talktype:m6_upgrade_seen')`; for fresh users, this returns null → banner renders. Banner text says "升級到 M6 LLM Polish" assuming user came from M5. A first-time user sees a confusing banner about an upgrade they never performed.
+  Mitigation: M9 polish — detect fresh install vs upgrade via heuristic (any keyring credential exists OR any other TalkType localStorage key OR `Settings.hotkey` customized). Suppress banner on fresh install.
+
+- **[P1] Architecture diagram in `doc/plans/01-architecture.md:273` references stale provider list (Decision #3 cascade)**
+  Line 273: `enhancing │←── LLM HTTP (Groq/OpenAI/Anthropic/Gemini)`. Should be `Groq/OpenRouter/NVIDIA/Gemini`. Line 283 also has stale `success ── 1s ──► idle` (should be 1.5s per Decision #8). Chunk 5 implementer claimed confirmed but didn't actually verify content.
+  Mitigation: trivial fix; do during M6.1.
+
+- **[P1] System prompts hardcoded zh-TW only — English-locale user gets Chinese system prompts**
+  `mod.rs:318` `prompts::system_prompt(mode, "zh-TW", ...)`. Even when UI locale is `en`, system_prompt returns `PROMPT_DEFAULT_ZH` etc. The system prompt biases output style — English user gets register switches.
+  Mitigation: M6.1 — detect from `args.rawText` first 80 chars with fallback to zh-TW. Better long-term: wire `Settings.languageUi` (M9 add field) and pass through.
+
+### Test coverage gaps
+
+- **[P0 — FIXED in this commit] No vitest catches the IPC arg-shape mismatch**
+  Existing `useVoiceFlowStore.test.ts:721-728` uses optional chaining `firstAttempt?.args?.attempt` which would have masked the bug. **Fix landed in this same commit**: tightened vitest assertions in both `SettingsLlmPolishSection.test.ts` (new assertion on Test polish click) + `useVoiceFlowStore.test.ts` (drop optional chaining on `firstAttempt.args`).
+
+- **[P1] No end-to-end vitest drives `recording → transcribing → enhancing → success` with all transitions asserted**
+  Each chunk has unit tests for its slice. But no test asserts: full handleStart-to-handleStop pipeline → enhancing emit fires → polishWarning stays false → success fires with green icon (not amber) → idle after 1500ms. Cross-cutting integration uncovered.
+
+- **[P1] No test asserts polishWarning auto-clear at next session even when polish was ON**
+  Lines 800-828 cover session 1 polish failure → polishWarning=true → session 2 starts → polishWarning=false. But no test for session 2 having polish ON + succeeding — does its success bubble correctly render green?
+
+- **[P2] 5 preset modes producing distinct outputs is purely manual**
+  Acceptance #8 — manual only. F12 has insta-snapshots of prompt strings standalone, not in request body context. M9 polish: 5-mode integration test with wiremock asserting system prompt round-trips.
+
+### Performance / shutdown / resource cleanup
+
+- **[P1] `lib.rs::RunEvent::Exit` does NOT wait for in-flight polish_text (elevate from IDEAS D21)**
+  Line 377-386 only calls `state.shutdown()` for hotkey listener. No wait for `polish_busy` to drain. User quits during polish → reqwest cancels but server-side already committed prompt tokens. NVIDIA NIM has hard 1000 credits/month cap so wasted requests over a dogfood week could exhaust user's budget. Implementing wait is small (mirror M3's transcribe wait pattern).
+  Mitigation: M6.1 candidate — minimum wait 500ms on `polish_busy.load() == false` poll.
+
+- **[P2] 3s Groq timeout is aggressive for retry-disabled users**
+  `mod.rs:353` Groq timeout 3s; with retry disabled, a single 4s slow Groq response on poor wifi hard-fails. Compare M3 transcribe_audio uses 30s timeout for same provider. The 3s came from "snappy enhancing visual" but at the cost of false negatives.
+  Mitigation: M9 dogfood — measure p95 Groq latency, consider bumping to 5s.
+
+- **[P2] Reqwest client spawned twice (TranscriptionState + LlmPolishState) — connection pool divergence**
+  `mod.rs:80-90` builds a fresh reqwest::Client. `transcription/mod.rs::TranscriptionState::new()` builds another. Both speak to api.groq.com. Separate clients = separate TLS/keepalive pools. ~150ms TLS handshake per polish call after a transcribe.
+  Mitigation: M9 polish — hoist a single `HttpClientState` shared across modules.
+
+### Documentation drift / acceptance gaps
+
+- **[P1] README.md missing M5→M6 upgrade warning that F35 specified**
+  F35 spec: "chunk 5 owns: 寫進 README.md v0.1.0 section + GitHub Release notes". Reading `README.md` shows lines 150-151 just list M5/M6 milestones; no upgrade warning. The text was added to i18n (`upgradeNote.m5ToM6.body`) but README/CHANGELOG never received the equivalent.
+  Mitigation: pre-v0.1.0 release — add upgrade warning section to README + draft GitHub Release notes body using same warning text.
+
+- **[P1] `m6-acceptance.md` Conditions #6 + #7 (retry on/off) are infeasible for a non-technical user**
+  Instructions tell user to monkey-patch invoke, yank Wi-Fi at exact moment for 3s timeout. Average user can't do (a); (b) requires precise timing.
+  Mitigation: M6.1 — provide a dev-mode "Force polish failure once" toggle in Settings (gated by `import.meta.env.DEV`). Or screen recording.
+
+- **[P1] `m6-acceptance.md` Condition #8 (5 preset modes) is purely manual, takes 5+ recordings × 10 min**
+  No tooling support. Dev-mode "compare presets side-by-side" UI would dramatically improve acceptance feasibility. M9 dogfood UX polish.
+
+- **[P2] `m6-acceptance.md` Condition #11 NVIDIA NIM expectation says "200+ models" — registries change**
+  Hardcoded count assumptions. Provider model registries change frequently. Acceptance assert should be "≥ 1 model" + provider name verified, NOT count.
+
+### Process retrospective
+
+- **[P1] Chunk 1 implementer crash → finisher pattern surfaced under-spec'd LOC budget for critical-path chunks**
+  Original chunk 1 budget 1100 LOC; implementer wrote 3742 LOC (mostly tests + docstrings). Reviewer accepted. But estimates need recalibration for M7/M8 (whisper.cpp binding, SQLite history) which are also "critical correctness" with similar profile.
+  Mitigation: M9 retrospective — redefine LOC budgets for critical-path chunks at 3-5x current with explicit "test/docstring share" sub-budget.
+
+- **[P1] SettingsLlmPolishSection 686 LOC is 70% over budget — would have caught the IPC arg bug if extracted**
+  Chunk 4 reviewer flagged P1 extract subcomponents. Had `useTestPolish` been extracted as a composable, the arg-shape mismatch with `useVoiceFlowStore.runPolishWithRetry` (the other polish_text caller) would have been visually adjacent in code review — much harder to miss. Lesson: LOC violations correlate with bug surface.
+  Mitigation: M9 polish — target ≤400 LOC of code (excluding docstrings/template) by extracting `DataflowIndicator + UpgradeBanner + NoKeyBanner + useTestPolish` composable.
+
+- **[P2] Plan-time challenger missed the IPC arg-shape integration risk despite catching 45 other things**
+  Challenger scanned chunks 0-4 thoroughly but didn't flag "two polish_text invokers must agree on arg-shape wrapper". This is the kind of integration risk that retro should catch (and DID).
+  Mitigation: for M7/M8 — have plan-time challenger explicitly enumerate "list every Tauri command consumed by frontend; verify shape match in spec".
+
+### SettingsLlmPolishSection LOC overrun
+
+- **[P2] LOC accuracy: implementer self-reported 470, reviewer flagged 686 — actual is 686**
+  `wc -l` confirms 686 lines. Implementer's "470" estimate likely excluded docstrings + template (~200 lines). LOC budget violations should be measured raw, not selectively.
+  Mitigation: M9 polish refactor — target ≤400 LOC of code (excluding docstrings/template) by extracting subcomponents. Reviewer LOC measurement methodology should be standardized.
+
+### Decision #7 tri-state edge cases
+
+- **[P1] Toggle UI has no path back to None auto-detect**
+  Once user explicitly toggles ON or OFF (`Some(true)` / `Some(false)`), there is no UI affordance to revert to `None`. User must edit `settings.json` manually. For trust-transitive design users, they're stuck on whichever explicit state they set.
+  Mitigation: M6.1 polish — add a "重設為自動偵測" Reset link that sends `{ llmPolishEnabled: null }` patch (settings.rs:585 already supports this).
+
+- **[P2] When `Some(true)` + no key, the "Test polish" button is enabled but every test invocation will fail**
+  Already in chunk 4 reviewer P2-3.
+  Mitigation: disable button when `polishVisualOn === true && !hasCredential` with tooltip "請先設定 API key". Reaffirm M9 priority.
+
+- **[P2] handleStart's auto-detect path uses `has_credential` only on chosen provider — doesn't fall back**
+  `useVoiceFlowStore.resolvePolishEnabledAtStart`: if `Settings.llmProvider === "openrouter"` but user has only Groq key, auto-detect returns false — silently skipping polish. Better: scan all 4 providers' credentials. Phase 2 design refinement.
+
+### Other
+
+- **[P1] `args.attempt` parameter is plumbed through Rust but never used**
+  `mod.rs:124` `attempt: u32` deserializes; handleStop passes 1 and 2. But Rust polish_text doesn't use attempt for any branching — purely informational. No `tracing::info!("attempt {}, ...", attempt)` exists.
+  Mitigation: M9 cleanup — either remove the param or add a single `tracing::info!`.
+
+- **[P2] `extracted_message` in `PolishError::ApiError` not exposed to frontend i18n**
+  `error.rs:134` ApiError variant has 3 fields including `extracted_message`. Frontend receives flat Display string. Without structured access, the frontend cannot easily i18n-template the status code separately.
+  Mitigation: M9 polish — change PolishError serialize to a small JSON object, mirror frontend type, type-safe i18n template fill.
+
+- **[P2] `default_attempt()` (mod.rs:127-129) can mask wire-format mismatches**
+  Useful defensive default but means "missing attempt only" wouldn't surface as a Rust deserialize error. The P0 bug only triggered because JS omitted `args` wrapper entirely. Near-miss.
+  Mitigation: M9 — consider removing default_attempt() to make wire-format mismatches loud failures.
+
+### Verdict
+
+- **Milestone-level state at retro time**: DEFER-PENDING-FIXES (P0 IPC arg-shape bug)
+- **Critical findings count**: P0={1 — FIXED in this commit}, P1={14}, P2={13}
+- **Recommended next action**:
+  1. ~~Fix P0~~ — DONE in this commit
+  2. ~~Tighten vitest~~ — DONE in this commit
+  3. User runs full `docs/m6-acceptance.md` 18 conditions; if any fail, retro re-runs
+- **Re-review trigger**: after user acceptance complete; if any acceptance condition fails, retro re-runs to assess regression scope. Else proceed to M7 dispatch with retro findings folded into M7 plan-time challenger reading list.

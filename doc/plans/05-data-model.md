@@ -1,7 +1,7 @@
 # 資料模型
 
-> **狀態**：Draft v1（M4 chunk 3 — Settings v1 schema 落地：Rust-owned `Settings { schema_version: 1, hotkey: HotkeyConfig }`、`tauri-plugin-store` 持久化）
-> **最後更新**：2026-05-05
+> **狀態**：Draft v1（M6 — Settings v1 schema 加 7 個 LLM polish optional fields：`llmPolishEnabled` (tri-state) / `llmProvider` / `llmModelId` / `llmModelIdOverride` (UI 不曝、v0.2 expose) / `llmPromptMode` / `llmCustomPrompt` / `llmPolishRetryEnabled`；無 migration、`schemaVersion` 維持 1）
+> **最後更新**：2026-05-06
 
 SQLite schema、settings JSON 格式、與 OS Credential Vault 儲存策略。
 
@@ -204,12 +204,14 @@ interface Settings {
   whisperModelId?: string;              // M7 加入
   languageTranscription?: string | null; // M7/M8
   
-  // ===== LLM Polish（M6 補完）=====
-  llmPolishEnabled?: boolean;
-  llmProvider?: LlmProviderId;
-  llmModelId?: string;
+  // ===== LLM Polish（M6 已落地、7 fields）=====
+  llmPolishEnabled?: boolean | null;     // Tri-state Decision #7：null = auto-detect via has_credential, true = explicit ON, false = explicit OFF
+  llmProvider?: LlmProviderId;           // 'groq' | 'openrouter' | 'nvidia' | 'gemini' (M6 4 free providers; 'openai' / 'anthropic' defer to v0.2)
+  llmModelId?: string;                   // 預設 by provider，user 可從 dropdown 選 ship 的 8 models (M6: 4 provider × 2 model)
+  llmModelIdOverride?: string;           // F4 escape hatch - UI 不曝（v0.2 expose）；user 改 settings.json 手動 set；read 優先 get_effective_model_id() = override.or(model_id)
   llmPromptMode?: 'default' | 'email' | 'chat' | 'code' | 'custom';
-  llmCustomPrompt?: string | null;
+  llmCustomPrompt?: string | null;       // chars().count() ≤ 1000 (CJK 1 char = 1 count、不是 bytes)
+  llmPolishRetryEnabled?: boolean | null; // F34 retry toggle、tri-state Decision #5：null = ON default, true = ON, false = OFF (no retry)
   
   // ===== UI / 語言（M8）=====
   languageUi?: string;

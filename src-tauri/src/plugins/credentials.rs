@@ -54,7 +54,23 @@ const SERVICE_NAME: &str = "com.luluboy168.talktype";
 /// the frontend cannot sneak arbitrary names into the keyring backend.
 /// Must stay in sync with `LlmProviderId` in `src/types/credentials.ts`
 /// and `LLM_PROVIDERS` in `src/lib/providers.ts`.
-const ALLOWED_PROVIDERS: &[&str] = &["groq", "openai", "anthropic", "gemini"];
+///
+/// **M6 chunk 1 extension** (Decision #3 cascade): the 4 active polish
+/// providers are `groq` / `openrouter` / `nvidia` / `gemini`. We additionally
+/// keep `openai` + `anthropic` as inactive credential storage targets for
+/// v0.2 forward-compat — those providers do not have a polish path in M6
+/// (chunk 1 dispatcher only matches the 4 active ids), but allowing
+/// `set_credential` on them now means a v0.2 user who pastes a key for them
+/// before the UI flips will not see a regression. Order is grouped by
+/// "active in M6 polish" first, then inactive placeholders.
+const ALLOWED_PROVIDERS: &[&str] = &[
+    "groq",
+    "openrouter",
+    "nvidia",
+    "gemini",
+    "openai",
+    "anthropic",
+];
 
 /// Maximum API key length we accept. No production API key from any of the
 /// four providers above is anywhere near this cap; this exists purely to
@@ -110,16 +126,23 @@ impl Serialize for CredentialsError {
 /// Provider-specific API key prefix expectations. Used by
 /// `validate_and_clean_key` for a soft pre-flight check. The prefixes are
 /// well-known but may evolve — empty string disables the check for that
-/// provider (used for Gemini, whose keys do not follow a single prefix
+/// provider (used for providers whose keys do not follow a single prefix
 /// convention).
 fn expected_prefix(provider: &str) -> &'static str {
     match provider {
         "groq" => "gsk_",
         "openai" => "sk-",
         "anthropic" => "sk-ant-",
+        // M6 chunk 1: OpenRouter keys are `sk-or-v1-...`. The shared `sk-`
+        // prefix with OpenAI is intentional in their docs; the `-or-` infix
+        // disambiguates so wrong-vendor pastes still fail soft validation
+        // when checked against the more specific prefix.
+        "openrouter" => "sk-or-",
+        // M6 chunk 1: NVIDIA NIM personal keys start with `nvapi-`.
+        "nvidia" => "nvapi-",
         // Gemini keys have multiple shapes (`AIza...`, `base64`-ish blobs,
-        // etc.) so we don't enforce a prefix — the test-connection step in
-        // M6 will catch invalid keys for this provider.
+        // etc.) so we don't enforce a prefix — the M6 test-connection step
+        // catches invalid keys for this provider.
         "gemini" => "",
         _ => "",
     }
@@ -252,7 +275,12 @@ pub async fn has_credential(
 ///   * `Ok(Some(key))` — provider has a stored key.
 ///   * `Ok(None)`      — provider exists in the allowlist but no key set.
 ///   * `Err(...)`      — invalid provider id or keyring backend error.
-#[allow(dead_code)]
+///
+/// Active call sites (M6 chunk 1):
+///   * `plugins::llm_polish::polish_text` — reads the LLM provider key
+///     before issuing the chat-completions POST. (chunk 1 removed the
+///     stale `#[allow(dead_code)]` annotation that previously hid this fn
+///     when only `keyring`-test paths called it.)
 pub(crate) fn get_credential(provider: &str) -> Result<Option<String>, CredentialsError> {
     validate_provider(provider)?;
     let entry =
@@ -327,7 +355,15 @@ mod tests {
 
     #[test]
     fn validate_provider_accepts_allowed() {
-        for provider in ["groq", "openai", "anthropic", "gemini"] {
+        // M6 chunk 1: 4 active polish providers + 2 inactive (v0.2 placeholders).
+        for provider in [
+            "groq",
+            "openrouter",
+            "nvidia",
+            "gemini",
+            "openai",
+            "anthropic",
+        ] {
             assert!(
                 validate_provider(provider).is_ok(),
                 "provider {provider:?} should be allowed"
@@ -337,7 +373,20 @@ mod tests {
 
     #[test]
     fn validate_provider_rejects_unknown() {
-        for provider in ["", "google", "../groq", "groq.exe", "GROQ", "groq "] {
+        // Includes case-sensitivity check (`OPENROUTER`), trailing whitespace,
+        // path traversal attempts. M6 active providers (lowercase) listed in
+        // ALLOWED_PROVIDERS must be the exact form accepted.
+        for provider in [
+            "",
+            "google",
+            "../groq",
+            "groq.exe",
+            "GROQ",
+            "groq ",
+            "OpenRouter",
+            "nvidia ",
+            "deepseek",
+        ] {
             assert!(
                 matches!(
                     validate_provider(provider),
@@ -346,6 +395,29 @@ mod tests {
                 "provider {provider:?} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn validate_and_clean_key_accepts_openrouter_prefix() {
+        // OpenRouter keys are `sk-or-v1-...` per the kickoff log F5 table.
+        assert!(validate_and_clean_key("sk-or-v1-abc123def", "openrouter").is_ok());
+        // Plain `sk-` (OpenAI shape) should be rejected for openrouter slot.
+        assert!(matches!(
+            validate_and_clean_key("sk-not-or", "openrouter"),
+            Err(CredentialsError::BadPrefix { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_and_clean_key_accepts_nvidia_prefix() {
+        // NVIDIA NIM personal keys start with `nvapi-` per the kickoff log
+        // F5 table.
+        assert!(validate_and_clean_key("nvapi-abc123def456", "nvidia").is_ok());
+        // Bearer-shape token from another vendor should be rejected.
+        assert!(matches!(
+            validate_and_clean_key("sk-not-nvidia", "nvidia"),
+            Err(CredentialsError::BadPrefix { .. })
+        ));
     }
 
     #[test]

@@ -148,4 +148,47 @@ describe("HudFlowBadge", () => {
     expect(unlistenMock).toHaveBeenCalledTimes(1);
     expect(callbacks.get("voice-flow:state-changed")).toBeUndefined();
   });
+
+  // ─── M6 chunk 3 (F26): enhancing badge — amber dot + 「優化中」 ─────────────
+
+  it("renders amber dot + 「優化中」 when receiving status='enhancing' from hud (F26)", async () => {
+    const wrapper = mountBadge();
+    await flushPromises();
+    const cb = callbacks.get("voice-flow:state-changed");
+    expect(cb).toBeDefined();
+    cb?.({
+      payload: { status: "enhancing", message: "", source: "hud" },
+    });
+    await flushPromises();
+    const root = wrapper.find('[role="status"]');
+    expect(root.exists()).toBe(true);
+    expect(root.attributes("aria-live")).toBe("polite");
+    // Amber pulsing dot rendered (NOT red — visual differentiation from
+    // recording is the whole point of F26).
+    expect(wrapper.find("span.bg-amber-500").exists()).toBe(true);
+    expect(wrapper.find("span.bg-red-500").exists()).toBe(false);
+    expect(wrapper.find("span.animate-pulse").exists()).toBe(true);
+    expect(wrapper.text()).toContain("優化中");
+    // Regression: the recording label string must NOT appear when in
+    // enhancing state.
+    expect(wrapper.text()).not.toContain("錄音中");
+  });
+
+  it("renders nothing for non-recording-non-enhancing states (F26 hidden states regression)", async () => {
+    // F26 spec: idle / transcribing / success / error all render nothing.
+    // Sweep through them via the listener callback and confirm the badge
+    // root is absent for each.
+    const wrapper = mountBadge();
+    await flushPromises();
+    const cb = callbacks.get("voice-flow:state-changed");
+    expect(cb).toBeDefined();
+    const hiddenStates = ["idle", "transcribing", "success", "error"] as const;
+    for (const status of hiddenStates) {
+      cb?.({
+        payload: { status, message: "", source: "hud" },
+      });
+      await flushPromises();
+      expect(wrapper.find('[role="status"]').exists()).toBe(false);
+    }
+  });
 });

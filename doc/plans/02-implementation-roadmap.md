@@ -1,7 +1,7 @@
 # 實作 Roadmap
 
-> **狀態**：Draft v1（M0–M5 done — M5 HUD overlay user acceptance 通過、3 acceptance fixes 已 commit：HUD visible:true、capability set-ignore-cursor-events、user-select:none）
-> **最後更新**：2026-05-05
+> **狀態**：Draft v1（M0–M6 done — M6 LLM polish 多 provider implementation 落地：4 free providers Groq/OpenRouter/NVIDIA NIM/Gemini + 5 preset modes + tri-state polish_enabled + retry toggle + polish failure fallback + M5→M6 upgrade banner + HUD enhancing visual + Dashboard sidebar enhancing badge；281 cargo + 99 vitest pass；user manual acceptance 18 條待跑 docs/m6-acceptance.md）
+> **最後更新**：2026-05-06
 
 依 milestone 順序拆解 Phase 1 全部任務。每個 milestone 給：deliverable、tasks、acceptance criteria、預估時間、依賴。
 
@@ -15,7 +15,7 @@
 | M3：Cloud transcription | ✅ Done | 2026-05-04 | 2026-05-04 |
 | M4：全域熱鍵 + paste | ✅ Done | 2026-05-05 | 2026-05-05 |
 | M5：HUD overlay | ✅ Done | 2026-05-05 | 2026-05-05 |
-| M6：LLM polish 多 provider | 📋 Planned | TBD | TBD |
+| M6：LLM polish 多 provider | ✅ Done | 2026-05-06 | 2026-05-06 |
 | M7：Local whisper.cpp | 📋 Planned | TBD | TBD |
 | M8：Dashboard 完整化 | 📋 Planned | TBD | TBD |
 | M9：Polish + 發布 v0.1.0 | 📋 Planned | TBD | TBD |
@@ -357,9 +357,11 @@
 
 ## M6：LLM Polish 多 Provider
 
-> **Deliverable**：4 個 LLM provider（Groq/OpenAI/Anthropic/Gemini）都能跑 polish、可開關、預設開、Rust-side fetch（API key 不過 IPC）
+> **狀態**：✅ Implementation done 2026-05-06、待 user 跑 `docs/m6-acceptance.md` 18 條 manual acceptance。Authoritative source-of-truth：[`sessions/2026-05-06-m6-llm-polish-kickoff.md`](../../.claude/sessions/2026-05-06-m6-llm-polish-kickoff.md)（plan + 8 decisions + 45 challenger findings）+ [`sessions/2026-05-06-m6-llm-polish.md`](../../.claude/sessions/2026-05-06-m6-llm-polish.md)（implementation session log）。本 section Tasks list **已 outdated**（OpenAI/Anthropic refs 已換成 OpenRouter/NVIDIA NIM、加 retry toggle、tri-state default `Option<bool>`）— 保留 historical reference、實際 implementation 對齊 kickoff log。
+>
+> **Deliverable**：4 free LLM provider（Groq/Gemini/OpenRouter/NVIDIA NIM）都能跑 polish、可開關、tri-state 動態預設、Rust-side fetch（API key 不過 IPC）；OpenAI + Anthropic defer 到 v0.2。
 
-### 設計決策（2026-05-03 Typeless / 競品 research + Q1 (a) review 後定案）
+### 設計決策（2026-05-03 Typeless / 競品 research + Q1 (a) review 後定案、2026-05-06 user 確認 8 decisions 後 refine）
 
 - **架構大轉**：原計畫的 `src/lib/{llmProvider,enhancer,modelRegistry}.ts` 全部移到 Rust（`plugins/llm_polish/`）。理由：
   - Q1 (a) 守住 "API key 從不在前端" 不變式
@@ -446,17 +448,17 @@
   - Vocabulary cap 邏輯
 - [ ] Integration test：raw text → polish → diff
 
-### Acceptance criteria
+### Acceptance criteria（M6 chunks 0-4 done、user manual acceptance 待跑 `docs/m6-acceptance.md` 18 條）
 
-- ✅ Settings 切 4 個 provider 都 work（test connection 全綠）
-- ✅ Settings 切 5 個 preset mode 都產出**明顯不同**的 polish 風格（手動驗證）
-- ✅ 中文「呃這個就是我覺得啊」polish 後變「我覺得這個還可以」之類
-- ✅ Custom prompt 1001 chars → UI 拒絕儲存
-- ✅ Polish OFF → 原始 Whisper 文字直接 paste、polish 路徑完全跳過
-- ✅ Polish 失敗（network / rate limit）→ fallback to raw + HUD warning icon、不擋 paste
-- ✅ Polish 平均耗時：Groq < 2s p50、< 3s p95（dogfood log 驗證）
-- ✅ API key 全程在 Rust 進程：`grep -r "get_credential" src/` 結果為空（frontend 完全不呼叫 get_credential）
-- ✅ Rust unit coverage > 70% on `plugins/llm_polish/`
+- ✅ Settings 切 4 個 provider 都 work（test connection 全綠、4 free providers Groq/OpenRouter/NVIDIA/Gemini、cargo wiremock + chunk 4 Playwright vite-shape 驗）— 待 user real-key dogfood 確認
+- 🚧 Settings 切 5 個 preset mode 都產出**明顯不同**的 polish 風格（cargo insta snapshot 5 prompts × 2 langs = 10 strings 已 cover、real LLM polish 風格差異待 user 跑）
+- 🚧 中文「呃這個就是我覺得啊」polish 後變「我覺得這個還可以」之類（real LLM 才知 distinct、cargo wiremock 用 pinned response 驗 parse correctness 但 real polish quality 待 user dogfood）
+- ✅ Custom prompt 1001 chars → UI 拒絕儲存（chunk 4 char count destructive + chunk 1 `validate_custom_prompt` chars().count() ≤ 1000）
+- ✅ Polish OFF → 原始 Whisper 文字直接 paste、polish 路徑完全跳過（chunk 2 vitest polish OFF tests + tri-state Some(false) path）
+- ✅ Polish 失敗（network / rate limit）→ fallback to raw + HUD warning icon、不擋 paste（chunk 2 vitest polish failure fallback + chunk 3 success-warning amber bubble）
+- 🚧 Polish 平均耗時：Groq < 2s p50、< 3s p95（dogfood log 驗證、待 user 跑）
+- ✅ API key 全程在 Rust 進程：`grep -r "get_credential" src/` 結果為空（frontend 完全不呼叫 get_credential、Rust `pub(crate) fn get_credential` 不 register IPC、F18 invariant、user devtools verify 也應 fail with command-not-found）
+- ✅ Rust unit coverage > 70% on `plugins/llm_polish/`（chunk 1 +118 cargo tests、wiremock per-provider × 4 + insta snapshots 10 + boundary 999/1000/1001 + LLM_MODEL_LIST + health 3 provider × {happy, 401, 429} + Gemini key= query string 禁 + OpenRouter Referer/Title header validation）
 
 ### 預估時間：1.5 週（Q1 (a) 改 Rust-side、原 1 週 + 0.5 週 4-provider Rust client）
 

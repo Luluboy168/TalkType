@@ -134,8 +134,17 @@ impl Serialize for TestConnectionError {
 }
 
 /// Tauri command — verify a provider's API key + network reachability in a
-/// single 5 s round trip. M3 ships Groq; M6 extends to the other three
-/// providers by adding match arms here. The frontend invokes via
+/// single 5 s round trip. M3 ships Groq; M6 chunk 1 adds OpenRouter / NVIDIA
+/// NIM / Gemini by dispatching into `crate::plugins::llm_polish::health` so
+/// the test paths live alongside their respective request builders.
+///
+/// **F20 file split**: Groq stays here (it's the only provider shared between
+/// Whisper transcription and LLM polish — moving it to `llm_polish::health`
+/// would break the M3 dispatcher contract). The 3 non-Groq providers live in
+/// `llm_polish::health`. The dispatcher uses the shared `TranscriptionState`
+/// `reqwest::Client` for all 4 to avoid a second connection pool.
+///
+/// The frontend invokes via
 /// `invoke<TestConnectionResult>('test_provider_connection', { provider })`
 /// and surfaces the result inline below the API key input.
 #[tauri::command]
@@ -145,9 +154,19 @@ pub async fn test_provider_connection(
 ) -> Result<TestConnectionResult, TestConnectionError> {
     match provider.as_str() {
         "groq" => test_groq_connection(&state.client, &provider).await,
-        // M3 only ships Groq. M6 will add openai / anthropic / gemini arms
-        // hitting their respective `/models` endpoints with provider-
-        // specific auth headers (`x-api-key` for anthropic etc.).
+        // M6 chunk 1: dispatch the 3 non-Groq polish providers into
+        // `llm_polish::health`. Decision #3 free-tier MVP scopes:
+        //   * openrouter → GET /api/v1/models  (Bearer + HTTP-Referer + X-Title)
+        //   * nvidia     → GET /v1/models      (Bearer)
+        //   * gemini     → GET /v1beta/models  (x-goog-api-key, F5: header-only)
+        "openrouter" => {
+            crate::plugins::llm_polish::health::test_openrouter_connection(&state.client).await
+        }
+        "nvidia" => crate::plugins::llm_polish::health::test_nvidia_connection(&state.client).await,
+        "gemini" => crate::plugins::llm_polish::health::test_gemini_connection(&state.client).await,
+        // openai / anthropic are credential-storage placeholders for v0.2
+        // (per credentials.rs ALLOWED_PROVIDERS extension); no test path
+        // until M9 wires them as polish providers.
         _ => Err(TestConnectionError::UnknownProvider(provider)),
     }
 }

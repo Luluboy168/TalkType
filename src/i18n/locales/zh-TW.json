@@ -7,11 +7,16 @@
     "aria": {
       "recording": "錄音中",
       "transcribing": "轉錄中",
+      "enhancing": "優化中",
       "success": "完成",
       "error": "錯誤：{message}"
     },
     "transcribing": "轉錄中…",
-    "success": "完成"
+    "enhancing": "優化中…",
+    "success": "完成",
+    "warning": {
+      "polishFailed": "優化失敗、已貼上原始轉錄"
+    }
   },
   "sidebar": {
     "dashboard": "儀表板",
@@ -19,7 +24,8 @@
     "dictionary": "字典",
     "settings": "設定",
     "guide": "使用指南",
-    "recordingBadge": "錄音中"
+    "recordingBadge": "錄音中",
+    "enhancingBadge": "優化中"
   },
   "dashboard": {
     "ipcSmoke": {
@@ -92,8 +98,8 @@
       "apiKey": {
         "title": "API 金鑰",
         "providerLabel": "供應商",
-        "providerInactiveSuffix": "M6+",
-        "providerInactiveHint": "此供應商將在 M6 LLM polish 階段啟用。",
+        "providerInactiveSuffix": "v0.2",
+        "providerInactiveHint": "此供應商將在 v0.2 啟用。",
         "keyLabel": "API key",
         "keyPlaceholder": {
           "withPrefix": "以 {prefix} 開頭",
@@ -111,10 +117,13 @@
         "testSuccess": "✅ 連線成功（{count} 個模型可用）",
         "testSuccessNoCount": "✅ 連線成功",
         "privacyDialog": {
-          "title": "傳送音訊到 {provider}",
+          "title": "傳送資料到 {provider}",
           "body": {
             "groq": "TalkType 會把你錄製的音訊傳送到 Groq (US) 進行轉錄。Groq 政策資料保留最多 14 天。詳見 https://groq.com/privacy",
-            "generic": "TalkType 會把你錄製的音訊傳送到 {provider} 進行處理。請參閱該供應商的隱私政策以了解資料保留政策。"
+            "openrouter": "音訊先送 Groq 轉成文字、再把潤飾請求送到 OpenRouter 與其底層模型供應商。OpenRouter 與底層 provider 各自記錄請求；OpenRouter 預設不訓練模型、底層供應商政策不一。",
+            "nvidia": "音訊先送 Groq 轉成文字、再把潤飾請求送到 NVIDIA NIM。NVIDIA 不使用提交內容訓練模型、預設記錄 telemetry 約 30 天。詳見 NVIDIA NIM 隱私政策。",
+            "gemini": "音訊先送 Groq 轉成文字、再把潤飾請求送到 Google Gemini。免費 tier 預設可能使用提交內容改善模型；付費 tier 不使用。請在 Google AI Studio 確認帳號類型。",
+            "generic": "TalkType 會把資料傳送到 {provider} 進行處理。請參閱該供應商的隱私政策以了解資料保留政策。"
           },
           "confirm": "我了解、繼續儲存",
           "cancel": "取消"
@@ -127,12 +136,101 @@
         },
         "testError": {
           "invalidKey": "❌ API key 無效（401）— 請檢查 key 是否完整、無多餘空白",
-          "restrictedKey": "❌ Key 權限不足（403）— 請確認此 key 有 Whisper API 權限",
+          "restrictedKey": "❌ Key 權限不足（403）— 請確認此 key 有對應 API 權限",
           "rateLimited": "❌ 速率限制中（429），請稍候 {seconds} 秒後再試",
           "rateLimitedNoSeconds": "❌ 速率限制中（429），請稍候再試",
           "network": "❌ 連線失敗 — 檢查網路或 HTTPS_PROXY 設定",
           "missingKey": "❌ 尚未儲存 API key",
           "unknown": "❌ 未知錯誤：{detail}"
+        }
+      },
+      "llmPolish": {
+        "title": "LLM 潤飾",
+        "enable": "啟用潤飾",
+        "enableDescription": "使用 LLM 把轉錄文字潤稿、修正口誤與贅字。會把轉錄文字送到所選 provider；停用即跳過、貼上原始轉錄。",
+        "providerLabel": "供應商",
+        "modelLabel": "模型",
+        "presetLabel": "風格",
+        "customPromptLabel": "自訂指令",
+        "preset": {
+          "default": {
+            "label": "預設",
+            "description": "通用文字潤飾、修正文法與贅字、保留原語氣。"
+          },
+          "email": {
+            "label": "Email",
+            "description": "正式語氣、段落分明、適合工作信件。"
+          },
+          "chat": {
+            "label": "聊天",
+            "description": "簡潔自然、口語化、適合即時通訊。"
+          },
+          "code": {
+            "label": "程式碼",
+            "description": "保留 code fences 與技術術語、不改寫程式碼語意。"
+          },
+          "custom": {
+            "label": "自訂",
+            "description": "使用下方自訂指令文字作為 system prompt。"
+          }
+        },
+        "customPrompt": {
+          "placeholder": "輸入自訂 system prompt(最多 1000 字)",
+          "charCount": "{n} / 1000",
+          "tooLong": "自訂指令超過 1000 字、請縮短",
+          "save": "儲存",
+          "cancel": "取消"
+        },
+        "dataFlow": {
+          "audio": "音訊",
+          "whisper": "{provider} Whisper",
+          "polish": "{provider} 潤飾",
+          "paste": "貼上",
+          "noRetention": "無保留",
+          "withoutPolish": "(未啟用潤飾)"
+        },
+        "testButton": "測試潤飾",
+        "testing": "潤飾中…",
+        "testBefore": "原文",
+        "testAfter": "潤飾後",
+        "testFailed": "潤飾測試失敗:{detail}",
+        "testSample": "「這個 呃 就是我覺得啊」",
+        "testDisabledTooltip": "啟用 LLM 潤飾後可測試",
+        "disabled": "(已停用)",
+        "banner": {
+          "noKey": "未設定 {provider} API key、潤飾路徑會跳過 — 請至 API key section 設定"
+        },
+        "retry": {
+          "label": "失敗時自動重試 1 次",
+          "description": "polish 第一次失敗時用同 provider 重試 1 次。重試仍失敗則貼上原始轉錄並顯示警告。"
+        }
+      },
+      "polishError": {
+        "apiKeyMissing": "未設定 {provider} API key",
+        "offline": "離線、無法連線到 LLM provider",
+        "timeout": "潤飾請求超時",
+        "tlsFailure": "TLS 交握失敗",
+        "dnsFailure": "DNS 解析失敗",
+        "connectionRefused": "連線被拒",
+        "networkOther": "網路錯誤",
+        "rateLimited": "速率限制中(retry-after {retryAfter}s)",
+        "apiError": "API 錯誤 {status}:{extractedMessage}",
+        "parseError": "回應格式錯誤",
+        "busy": "上一筆潤飾仍在處理",
+        "invalidPromptLength": "自訂指令長度異常({actual}/{max})",
+        "safetyBlocked": "內容被供應商安全政策攔截",
+        "emptyResponse": "LLM 回應為空",
+        "truncated": "LLM 回應截斷、輸出過短",
+        "implausibleOutput": "LLM 回應異常、可能是拒答或失控擴張",
+        "cancelled": "已取消",
+        "disabled": "潤飾已停用",
+        "fallbackDisabled": "潤飾失敗、已貼上原始轉錄"
+      },
+      "upgradeNote": {
+        "m5ToM6": {
+          "title": "升級到 M6 LLM Polish",
+          "body": "M6 加入 LLM 潤飾功能、預設會 auto-detect:已設過 Groq API key 者潤飾預設啟用、轉錄文字會送進 Groq chat completions 加工;未設任何 LLM provider key 者潤飾自動 OFF、原樣轉錄行為不變。如不希望啟用、請把上方 toggle 切到關閉。完整資料流請看下方 per-step indicator。",
+          "dismiss": "我知道了"
         }
       },
       "audioInput": {

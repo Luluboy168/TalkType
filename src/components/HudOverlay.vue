@@ -1,22 +1,36 @@
 <script setup lang="ts">
-// HudOverlay — root HUD bubble orchestrator (M5 chunk 2 rewrite).
+// HudOverlay — root HUD bubble orchestrator (M5 chunk 2 rewrite, M6 chunk 3).
 //
-// Replaces the M1 placeholder pong counter with the real 4-state machine:
-// recording / transcribing / success / error. Each state mounts a different
-// inner bubble inside `<Transition mode="out-in">`; the root container
-// carries the ARIA semantics + click-to-dismiss handler + click-through
-// toggle.
+// **M5 baseline**: 4 visual states recording / transcribing / success / error,
+// each mounted in `<Transition mode="out-in">`; root container carries ARIA
+// semantics + click-to-dismiss + click-through toggle.
+//
+// **M6 chunk 3** adds:
+//   * 5th `enhancing` state between transcribing and success — HudSpinner +
+//     「優化中…」 label (Decision #5 the visual state count grew by one).
+//   * Success bubble dual-mode (Decision #5): when `store.polishWarning ===
+//     true` the success bubble swaps `CheckCircle2` (green-600) for
+//     `AlertTriangle` (amber-500) and shows the「優化失敗、已貼上原始轉錄」
+//     warning string. This keeps the user informed that polish silently
+//     fell back without throwing them into the red error state (raw paste
+//     still ran successfully — degraded-but-OK).
+//   * F27 click-through: `enhancing` is ON (same as transcribing / success).
+//     Only `error` remains OFF so the user can click to dismiss.
+//   * F28 ARIA differentiation: `hud.aria.transcribing` ("轉錄中") vs
+//     `hud.aria.enhancing` ("優化中") differ by 2+ Unicode characters so
+//     screen readers announce both transitions distinctly.
 //
 // Reactive system:
-//   * status / message / recordingStartedAtMs come from `useVoiceFlowStore`
-//     (M5 chunk 1; readonly refs).
+//   * status / message / recordingStartedAtMs / polishWarning come from
+//     `useVoiceFlowStore` (M5 chunk 1; readonly refs); `polishWarning` was
+//     added in M6 chunk 2.
 //   * `prefers-reduced-motion: reduce` reactivity via `window.matchMedia`
 //     + 'change' listener — picks `instant` transition variant + cascades
 //     to HudWaveform / HudSpinner so they render their static fallbacks
 //     without running any RAF / CSS animation.
 //   * `setIgnoreCursorEvents` is toggled in `watch(status)`:
 //       - 'error' → false (so the user can click to dismiss)
-//       - any other → true (HUD is purely decorative)
+//       - any other (recording / transcribing / enhancing / success) → true
 //
 // Click semantics: only act when status is `error` — for other states we
 // shouldn't be clickable anyway because click-through is on, but the guard
@@ -24,7 +38,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { CheckCircle2, XCircle } from "lucide-vue-next";
+import { AlertTriangle, CheckCircle2, XCircle } from "lucide-vue-next";
 
 import HudSpinner from "@/components/HudSpinner.vue";
 import HudTimer from "@/components/HudTimer.vue";
@@ -44,8 +58,18 @@ const ariaMessage = computed(() => {
       return t("hud.aria.recording");
     case "transcribing":
       return t("hud.aria.transcribing");
+    case "enhancing":
+      // F28: distinct wording from `transcribing` so SR announces both
+      // transitions (tested via Unicode-aware \p{L} comparison in
+      // src/__tests__/aria-wording.test.ts).
+      return t("hud.aria.enhancing");
     case "success":
-      return t("hud.aria.success");
+      // Decision #5 success bubble dual-mode — when polish fell back to
+      // raw paste, replace「完成」with the polish-failed warning so the
+      // SR matches the visual amber AlertTriangle.
+      return store.polishWarning
+        ? t("hud.warning.polishFailed")
+        : t("hud.aria.success");
     case "error":
       return t("hud.aria.error", { message: store.message });
     default:
@@ -59,6 +83,10 @@ const transitionName = computed(() =>
 async function syncClickThrough(status: string): Promise<void> {
   // Keep window click-through-on for everything except error; the user must
   // be able to click the bubble to dismiss the error state.
+  // F27 (M6 chunk 3): the new `enhancing` state is click-through ON (same
+  // as transcribing / success) — only `error` remains OFF. The boolean
+  // expression `status !== "error"` covers all 5 visual states correctly
+  // without needing an explicit case for `enhancing`.
   // Surface failures (e.g. capability missing) so they don't fail silently —
   // M5 acceptance found that without core:window:allow-set-ignore-cursor-events
   // the IPC call rejects and HUD blocks all clicks.
@@ -132,16 +160,39 @@ onUnmounted(() => {
         <span class="bubble-label">{{ t("hud.transcribing") }}</span>
       </div>
       <div
+        v-else-if="store.status === 'enhancing'"
+        key="enhancing"
+        class="bubble"
+      >
+        <HudSpinner :reduced-motion="reducedMotion" />
+        <span class="bubble-label">{{ t("hud.enhancing") }}</span>
+      </div>
+      <div
         v-else-if="store.status === 'success'"
         key="success"
         class="bubble"
       >
+        <!-- Decision #5 dual-mode: amber AlertTriangle + warning label when
+             polish fell back, else green CheckCircle2 + 「完成」 (M5 baseline). -->
+        <AlertTriangle
+          v-if="store.polishWarning"
+          :size="20"
+          aria-hidden="true"
+          class="text-amber-500"
+        />
         <CheckCircle2
+          v-else
           :size="20"
           aria-hidden="true"
           class="text-green-600"
         />
-        <span class="bubble-label">{{ t("hud.success") }}</span>
+        <span class="bubble-label">
+          {{
+            store.polishWarning
+              ? t("hud.warning.polishFailed")
+              : t("hud.success")
+          }}
+        </span>
       </div>
       <div
         v-else-if="store.status === 'error'"

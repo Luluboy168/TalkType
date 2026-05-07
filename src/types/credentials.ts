@@ -9,18 +9,18 @@
 // here. The frontend cannot read API key contents — only existence
 // (`hasCredential`), set (`setCredential`), or delete (`deleteCredential`).
 // See `doc/plans/01-architecture.md` invariant #1.
+//
+// **M6 chunk 0 note**: `LlmProviderId` is now defined in `./llm` (Decision #3
+// pivots from `groq | openai | anthropic | gemini` to `groq | openrouter |
+// nvidia | gemini` — free-tier providers only). Credentials re-exports the
+// type so existing import paths (`@/types/credentials`) keep working without
+// chunk 0 having to chase every consumer. The Rust `ALLOWED_PROVIDERS`
+// allowlist will be updated in chunk 4 (Settings UI flip from openai/
+// anthropic to openrouter/nvidia), not chunk 0.
 
-/**
- * LLM / Whisper provider identifier. Used both for credential storage
- * (`set_credential` / `has_credential` / `delete_credential` Tauri commands)
- * and as the discriminator for provider-specific request shapes (M3 cloud
- * transcription, M6 LLM polish).
- *
- * Phase 1 (M3) only activates `groq`. The other three are pre-listed so the
- * Settings UI dropdown can render them as `(M6+)` placeholders without
- * needing structural changes once M6 lands.
- */
-export type LlmProviderId = "groq" | "openai" | "anthropic" | "gemini";
+import type { LlmProviderId } from "./llm";
+
+export type { LlmProviderId };
 
 /**
  * Static metadata for one provider — display name, console URL for the

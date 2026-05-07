@@ -36,6 +36,14 @@ playwright/.auth/
 .playwright-mcp/
 coverage/
 
+# Playwright reviewer screenshots — chunk reviewers use Playwright MCP
+# `browser_take_screenshot` which ignores the filename param and writes
+# `m5r-*.png` / `m6r-*.png` to repo root, polluting `git status`. Both M5
+# and M6 reviewers have hit this. See .claude/IDEAS.md M6 chunk 3 reviewer
+# P2-1.
+m5r-*.png
+m6r-*.png
+
 # Tauri signing keys (NEVER commit)
 *.key
 *.key.pub

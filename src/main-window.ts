@@ -79,7 +79,13 @@ if (import.meta.env.DEV) {
     window as unknown as {
       __dashboardDev?: {
         emitFlow: (
-          status: "idle" | "recording" | "transcribing" | "success" | "error",
+          status:
+            | "idle"
+            | "recording"
+            | "transcribing"
+            | "enhancing"
+            | "success"
+            | "error",
           opts?: { message?: string; source?: "hud" | "dashboard" },
         ) => void;
       };
